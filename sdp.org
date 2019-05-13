@@ -1,0 +1,1739 @@
+# -*- mode: org -*-
+# -*- coding: utf-8 -*-
+
+#+TITLE: Xxx
+#+DESCRIPTION: Xxx
+#+AUTHOR:   Frank Ruben (frankruben27@gmail.com)
+#+LANGUAGE: en
+#+DATE: 12-05-2019 21:50:17
+#+STARTUP: showall
+#+OPTIONS: H:4
+#+OPTIONS: ^:{}
+#+PROPERTY: header-args+ :mkdirp yes
+#+PROPERTY: header-args+ :noweb tangle
+#+PROPERTY: header-args+ :padline no
+#+TAGS:
+
+* Overview
+
+* Implementation
+
+** Makefile
+:PROPERTIES:
+:header-args:makefile: :tangle src/Makefile
+:END:
+
+The following command line arguments are used for the various Schemes:
+
+- Guile:
+
+  - Allow to read S-expression content from file ={implementation}.scm= in =get-metadata-file=:
+    =MD_PATH=$(MD_PATH)=
+
+  - Add file =metadata.scm= with common API procedures to load path:
+    =-L "$(CURDIR)/common"=
+
+- Gauche:
+
+  - Allow to read S-expression content from file ={implementation}.scm= in =get-metadata-file=:
+    =MD_PATH=$(MD_PATH)=
+
+  - Add file =metadata.scm= with common API procedures to load path:
+    =-A"$(CURDIR)/common/sdp/common"=;
+
+    *Note:* To get a stacktrace in Gauche, run the tests without the trailing `-e"(test)"`, this will load the files to test,
+     then execute `(test)` in the REPL.
+
+#+begin_src makefile
+.PHONY : all test
+
+all :
+
+test : test-repl test-metadata test-http-server
+
+FORCE :
+#+end_src
+
+#+begin_src makefile
+MD_PATH         ?= /home/frank/localsrc/implementation-metadata
+DEBUG_OFF       ?= '--debug=\#f'
+DEBUG_ALL       ?= '--debug=\#t'
+#+end_src
+
+#+begin_src makefile
+.PHONY : run-http-server
+
+run-http-server :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (http-server)"
+#+end_src
+
+#+begin_src makefile
+.PHONY : run-client-guile
+
+run-client-guile :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp client client)) (main)"
+#+end_src
+
+#+begin_src makefile
+.PHONY : test-repl test-repl-gauche test-repl-guile
+
+test-repl : test-repl-gauche test-repl-guile
+
+test-repl-gauche :
+	echo "Not yet implemented: " $@
+	MD_PATH=$(MD_PATH) gosh -A"$(CURDIR)/gauche" -A"$(CURDIR)/common/sdp/common" -e"(use sdp.common.repl-gauche)" -e"(test)" -e"(exit)" -- $(DEBUG_ALL)
+	tail -n2 test-repl-gauche.log
+
+test-repl-guile :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp common repl-guile)) (test)" $(DEBUG_ALL)
+	tail -n2 test-repl-guile.log
+#+end_src
+
+#+begin_src makefile
+.PHONY : test-metadata test-metadata-gauche test-metadata-guile
+
+test-metadata : test-metadata-gauche test-metadata-guile
+
+test-metadata-gauche :
+	MD_PATH=$(MD_PATH) gosh -A"$(CURDIR)/gauche" -A"$(CURDIR)/common/sdp/common" -e"(use sdp.common.metadata-gauche)" -e"(test)" -e"(exit)" -- $(DEBUG_ALL)
+	tail -n2 test-metadata-gauche.log
+
+test-metadata-guile :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp common metadata-guile)) (test)" $(DEBUG_ALL)
+	tail -n2 test-metadata-guile.log
+#+end_src
+
+#+begin_src makefile
+.PHONY : test-http-server
+
+test-http-server :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test)" $(DEBUG_ALL)
+	tail -n2 test-http-server-guile.log
+#+end_src
+
+** Scheme sources
+
+*** Common code
+
+The section below defines some common code to be used by all implementations. Since I cannot expect to find a
+sufficiently common module feature set over all implementations, I do not even try to use modules for this task, instead
+I'm using more low-level file inclusion. To avoid any trouble with load-paths and differing interpretations of e.g.
+=load= or =include=, I could simple use Org-mode's Noweb mechanism to already "include" on the Emacs side. But for now I
+try to figure out how to use the mechanisms provided by the various Schemes for that task.
+
+- Gauche: Both =include= and =load= do work, assuming that the folder for the common sources (=~/src/common/sdp/common=)
+  has been added to the load path; see =Makefile=. Still when using =load=, Gauche requires to pass the environment of
+  the current module as shown in the source block below:
+
+  #+begin_src scheme
+  (load "metadata" :environment (find-module 'sdp.common.metadata-gauche))
+  #+end_src
+
+  Note that when including a file into a Gauche modul, it seems to be necessary to first explicitly select the current
+  module using something like =(select-module sdp.common.model-gauche)= to avoid errors such as "Attempted to create a
+  binding (...) into gauche....".
+
+- Guile: When using =load=, Guile requires =eval-when=, see the example source block below (and the [[https://www.gnu.org/software/guile/manual/html_node/Loading.html][documentation]]).
+  Guile also requires to add the root folder for the common sources (=~/src/common=) to be added to the [[https://www.gnu.org/software/guile/manual/html_node/Load-Paths.html][load path]].
+  Alternatively =primitive-load-path= can be used within =eval-when= and with using a relative path. As it's [[https://www.gnu.org/software/guile/manual/html_node/Local-Inclusion.html][supposed to
+  do]], =include= does not require =eval-when=, but also did not resolve paths as expected. So instead for Guile I'm using
+  =include-from-path=, which again requires a relative path and assumes that the root folder for the common sources
+  (=~/src/common=) has been added to the load path; see =Makefile=.
+
+  #+begin_example scheme
+  (eval-when (expand load eval)
+             ;; requires -L "$(CURDIR)/common": this will call (primitive-load-path "sdp/common/metadata.scm")
+             (load "metadata.scm")) ; or: (primitive-load-path "sdp/common/metadata.scm")
+  #+end_example
+
+Note that it's necessary that the calling module already imports all required dependencies *before* including a common
+Scheme file, so that these files can be written without having to require their dependencies - as the low-level loading
+of these dependencies might again force implementation-specific code to be used.
+
+The following procedure naming convention has been chosen for the common include files:
+
+- =%%procedure= denotes as procedure that is only supposed to be used with the current include file.
+
+- =%procedure= denotes as procedure that is supposed to be wrapped by an implementation specific =procedure=.
+
+- =procedure= denotes as procedure for which no restrictions are assumed; that procedure might also be exported by the
+  including module.
+
+**** Prelude
+:PROPERTIES:
+:header-args:my-scheme: :tangle src/common/sdp/common/prelude.scm
+:END:
+
+Some simple general-purpose helpers.
+
+#+begin_src my-scheme
+;;; Include file defining a prelude with common, implementation-independent helpers.
+;;; Commentary:
+
+;;; Code:
+
+(define-syntax assert
+  (syntax-rules ()
+    ((_ e)
+     (if e
+         e
+         (error "Assertion failed" `e e)))
+    ((_ e msg)
+     (if e
+         e
+         (error "Assertion failed" msg `e e)))))
+
+(define-syntax assert-pred
+  (syntax-rules ()
+    ((_ pred e)
+     (if (pred e)
+         e
+         (error "Assertion failed" `pred `e e)))
+    ((_ pred e msg)
+     (if (pred e)
+         e
+         (error "Assertion failed" msg `pred `e e)))))
+
+(define (displayln . args)
+  (for-each display args)
+  (newline))
+#+end_src
+
+**** Minimal logging
+:PROPERTIES:
+:header-args:my-scheme: :tangle src/common/sdp/common/logging.scm
+:END:
+
+#+begin_src my-scheme
+;;; Include file defining support for some implementation-independent logging helpers.
+;;; Commentary:
+
+;;; Code:
+
+(define %%log-off   0)
+(define %%log-warn  300)
+(define %%log-info  400)
+(define %%log-debug 500)
+(define %%log-all   999)
+
+(define +%%debug-level+
+  (make-parameter %%log-all
+                  (lambda (v)
+                    (let ((n (if (number? v) v (string->number v))))
+                      (if (positive? n) n %%log-off)))))
+
+(define (%%log out level prefix . messages)
+  (when (>= (+%%debug-level+) level)
+    (format out "~a: ~a~%" prefix messages))
+  (if #f #f #;return-unspecified))
+
+(define (debug      . messages) (apply %%log (current-output-port) %%log-debug "debug" messages))
+(define (info       . messages) (apply %%log (current-output-port) %%log-info  "info " messages))
+(define (warn       . messages) (apply %%log (current-error-port)  %%log-warn  "warn " messages))
+(define (error-exit . messages) (apply %%log (current-error-port)  %%log-off   "error" messages) (exit 1))
+#+end_src
+
+**** Data model
+
+***** Common code
+:PROPERTIES:
+:header-args:my-scheme: :tangle src/common/sdp/common/model.scm
+:END:
+
+General data model, usually implemented using record types as defined by [[https://srfi.schemers.org/srfi-9/srfi-9.html][SRFI-9]].
+
+#+begin_src my-scheme
+;;; Include file defining some commonly used record types and related helper procedures.
+;;; Commentary:
+
+;;; Code:
+
+(define-record-type <client-info>
+  (%%make-client-info implementation-name implementation-version implementation-mode module-name)
+  <client-info?>
+  (implementation-name    client-info-implementation-name)
+  (implementation-version client-info-implementation-version)
+  (implementation-mode    client-info-implementation-mode)
+  (module-name            client-info-module-name))
+
+(define (%make-client-info implementation-name implementation-version implementation-mode)
+  (%%make-client-info (assert-pred string? implementation-name)
+                      (assert-pred string? (or implementation-version "(default)"))
+                      (assert-pred string? (or implementation-mode "(default)"))
+                      #f))              ; module-name not yet used
+
+(define (make-generic-client-info)
+  ;; -> <client-info?>; Used whenever no specific Scheme implementation information is available.
+  (%make-client-info "generic" #f #f))
+
+(define (make-unknown-client-info)
+  ;; -> <client-info?>; Used whenever an explicitly not existing Scheme implementation is to be used, e.g. for testing.
+  (%make-client-info "unknown" #f #f))
+
+(define-record-type <request>
+  (%%make-request id method text-document text-at-point params trace-level
+                  content-type content-encoding accept-type accept-encoding accept-documentation-format)
+  <request?>
+  (id                          request-id)
+  (method                      request-method)
+  (text-document               request-text-document)
+  (text-at-point               request-text-at-point)
+  (params                      request-params)
+  (trace-level                 request-trace-level)
+  (content-type                request-content-type)
+  (content-encoding            request-content-encoding)
+  (accept-type                 request-accept-type)
+  (accept-encoding             request-accept-encoding)
+  (accept-documentation-format request-accept-documentation-format))
+
+(define *request-counter* 0)
+(define (%make-request method text-document text-at-point params trace-level accept-type)
+
+  (define (or/false pred)
+    ;; (-> boolean? (-> any boolean?)); the returned predicate returns true iff the passed object matches the given
+    ;;   predicate or its value is #f.
+    (lambda (obj) (if obj (pred obj) #t)))
+
+  (set! *request-counter* (+ *request-counter* 1))
+  (let* ((content-type                "application/sexp")
+         (content-encoding            "utf-8")
+         (accept-type                 (cond
+                                       ((and accept-type (string=? accept-type "application/sexp"))
+                                        accept-type)
+                                       ((and accept-type (string=? accept-type "application/json"))
+                                        accept-type)
+                                       ((and accept-type (string=? accept-type "text/html"))
+                                        accept-type)
+                                       ((and accept-type (string=? accept-type "text/plain"))
+                                        accept-type)
+                                       ((not accept-type)
+                                        "application/sexp")
+                                       (else
+                                        (error "Bad accept type" accept-type))))
+         (accept-encoding             "utf-8")
+         (accept-documentation-format (cond
+                                       ((and accept-type (string=? accept-type "application/sexp"))
+                                        (list "plaintext" "markdown"))
+                                       ((and accept-type (string=? accept-type "application/json"))
+                                        (list "plaintext" "markdown"))
+                                       ((and accept-type (string=? accept-type "text/html"))
+                                        (list "plaintext"))
+                                       ((and accept-type (string=? accept-type "text/plain"))
+                                        (list "plaintext" "markdown"))
+                                       (else
+                                        (error "Bad accept type" accept-type)))))
+
+    (%%make-request *request-counter*
+                    (assert-pred string?             method)
+                    (assert-pred (or/false string?)  text-document)
+                    (assert-pred (or/false string?)  text-at-point)
+                    (assert-pred list?               (or params '()))
+                    (assert-pred (lambda (l) (member l '(off messages verbose))) (or trace-level 'verbose))
+                    (assert-pred string?             content-type)
+                    (assert-pred string?             content-encoding)
+                    (assert-pred string?             accept-type)
+                    (assert-pred string?             accept-encoding)
+                    (assert-pred pair? #|non-empty|# accept-documentation-format))))
+
+(define-record-type <response>
+  (%%make-response id method text-document text-at-point result error-code error-message
+                   content-type content-encoding content-documentation-format)
+  <response?>
+  (id                           response-id)
+  (method                       response-method)
+  (text-document                response-text-document)
+  (text-at-point                response-text-at-point)
+  (result                       response-result)
+  (error-code                   response-error-code)
+  (error-message                reponse-error-message)
+  (content-type                 response-content-type)
+  (content-encoding             response-content-encoding)
+  (content-documentation-format response-content-documentation-format))
+
+(define (%make-response request result)
+  (assert-pred <request?> request)
+  (%%make-response (request-id                          request)
+                   (request-method                      request)
+                   (request-text-document               request)
+                   (request-text-at-point               request)
+                   (assert-pred string?                 result)
+                   #f
+                   #f
+                   (request-accept-type                 request)
+                   (request-accept-encoding             request)
+                   (request-accept-documentation-format request)))
+
+(define (%make-error-response request error-code error-message)
+  (assert-pred <request?> request)
+  (%%make-response (request-id                          request)
+                   (request-method                      request)
+                   (request-text-document               request)
+                   (request-text-at-point               request)
+                   #f
+                   (assert-pred number?                 error-code)
+                   (assert-pred string?                 error-message)
+                   (request-accept-type                 request)
+                   (request-accept-encoding             request)
+                   (request-accept-documentation-format request)))
+#+end_src
+
+#+begin_src my-scheme
+(define (make-dispatch-handler handler-list)
+
+  (define (%atom->string obj for-sexp?)
+    (let ((quoter (if for-sexp?
+                      (lambda (s) (string-append (string #\") s (string #\")))
+                      identity)))
+      (cond
+       ((string? obj) (quoter obj))
+       ((number? obj) (quoter (number->string obj)))
+       ((symbol? obj) (quoter (symbol->string obj)))
+       (else (error "Unexpected atom" obj)))))
+
+  (define (other->string obj)           ; no quotes
+    (with-output-to-string (lambda () (display obj))))
+
+  (define (sexp->string obj)            ; with quotes
+    (with-output-to-string (lambda () (write obj))))
+
+  (define (atom->other-string obj)
+    (%atom->string obj #f))
+
+  (define (atom->sexp-string obj)
+    (%atom->string obj #t))
+
+  (define (->list ->string)             ; ((->list atom->other-string) '(1 2 3))
+    (lambda (l) (map ->string l)))
+
+  (define (->alist ->string)            ; ((->alist atom->other-string) '((a . 1) (b . 2) (b . 3)))
+    (lambda (al) (map (lambda (p) (cons (->string (car p)) (->string (cdr p)))) al)))
+
+  (define (->alists ->string)           ; ((->alists atom->other-string) '(((a . 1) (b . 2) (b . 3))))
+    (lambda (als) (map (lambda (al) ((->alist ->string) al)) als)))
+
+  (define (make-result-formatter request result-type)
+    (let* (;; for now we simply pick the first accepted document format, no negotiation:
+           (df (car (request-accept-documentation-format request)))
+           (text-proc (cond
+                       ;; TODO: selecting markdown or plaintext is not orthogonal to the accept-type as markdown won't
+                       ;;   make much sense for e.g. HTML, so check this when already creating the request or here?
+                       ;; TODO: implement markdown formatting, then use `text-proc'.
+                       ((string=? df "plaintext") identity)
+                       ((string=? df "markdown")  identity)
+                       (else (error "Bad documentation format" df))))
+           (at (request-accept-type request)))
+      (cond
+       ((string=? at "application/sexp")
+        (case result-type
+          ((atom)   atom->sexp-string)
+          ((list)   (->list atom->sexp-string))
+          ((alist)  (->alist atom->sexp-string))
+          ((alists) (->alists atom->sexp-string))
+          (else (error "Bad result type" result-type))))
+       ((string=? at "application/json")
+        (case result-type
+          ((atom)   atom->other-string)
+          ((list)   (->list atom->other-string))
+          ((alist)  (->alist atom->other-string))
+          ((alists) (->alists atom->other-string))
+          (else (error "Bad result type" result-type))))
+       ((string=? at "text/html")
+        (case result-type
+          ((atom)   atom->other-string)
+          ((list)   (->list atom->other-string))
+          ((alist)  (->alist atom->other-string))
+          ((alists) (->alists atom->other-string))
+          (else (error "Bad result type" result-type))))
+       ((string=? at "text/plain")
+        (case result-type
+          ((atom)   atom->other-string)
+          ((list)   (->list atom->other-string))
+          ((alist)  (->alist atom->other-string))
+          ((alists) (->alists atom->other-string))
+          (else (error "Bad result type" result-type))))
+       (else (error "Bad accept type" at)))))
+
+  (lambda (request key)
+    ;; 1st level of dispatch: find handler procedure for given `key':
+    (let loop ((handler-search-list handler-list))
+      (cond
+       ((null? handler-search-list)
+        (error "Cannot find handler" key (map car handler-list)))
+       ((eq? (car (car handler-search-list)) key)
+        (let* ((handler (assert-pred list? (car handler-search-list)))
+               (result-type (assert-pred symbol? (cadr handler)))
+               (handler-proc (assert-pred procedure? (caddr handler)))
+               ;; 2nd level of dispatch: make formatting procedure for request's accept parameters and `result-type':
+               (result-formatter (assert-pred procedure? (make-result-formatter request result-type))))
+          (lambda args
+            ;; return a handler procedure, supporting various argument list formats, which will also format the result:
+            (let* ((result (apply handler-proc args))
+                   (formatted (assert-pred string? (result-formatter result))))
+              formatted))))
+       (else
+        (loop (cdr handler-search-list)))))))
+
+(define *request-method-unknown*  1000)
+(define *no-text-at-point*        1001)
+
+(define (request->response client-info dispatch-handler request)
+  (assert-pred <client-info?> client-info)
+  (assert-pred procedure? dispatch-handler)
+  (assert-pred <request?> request)
+  (assert-pred <response?>
+               (let ((method (request-method request)))
+                 (cond
+                  ((string=? method "documentation-index-url")
+                   (%make-response request ((dispatch-handler request 'documentation-index-url) client-info)))
+                  ((string=? method "documentation-query-url")
+                   (let ((tap (request-text-at-point request)))
+                     (if tap
+                         (%make-response request ((dispatch-handler request 'documentation-query-url) client-info tap))
+                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                  ((string=? method "built-in-describe-object")
+                   (let ((tap (request-text-at-point request)))
+                     (if tap
+                         (%make-response request ((dispatch-handler request 'built-in-describe-object) client-info tap))
+                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                  ((string=? method "built-in-apropos-fragment")
+                   (let ((tap (request-text-at-point request)))
+                     (if tap
+                         (%make-response request ((dispatch-handler request 'built-in-apropos-fragment) client-info tap))
+                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                  (else
+                   (%make-error-response request *request-method-unknown* (string-append "Request method unknown: " method)))))))
+#+end_src
+
+***** Gauche-specific code
+:PROPERTIES:
+:header-args:my-scheme-gauche: :tangle src/gauche/sdp/common/model-gauche.scm
+:END:
+
+To just test the bindings imported and exported from that module, run the following:
+
+#+begin_src shell
+gosh -A"./gauche" -A"./common/sdp/common" -e"(use sdp.common.model-gauche)" -e"(list make-client-info-gauche make-request)" -e"(exit)"
+#+end_src
+
+#+begin_src my-scheme-gauche
+;;; Module wrapping access to the data model for Gauche Scheme
+;;; Commentary:
+
+;;; Code:
+
+(define-module sdp.common.model-gauche
+  (use util.match)
+  (use gauche.parameter)
+  (use srfi-9)
+  (export <client-info?> make-generic-client-info make-unknown-client-info client-info-implementation-name)
+  (export make-request request->response make-dispatch-handler)
+  (export make-client-info-gauche))
+(select-module sdp.common.model-gauche)
+
+(include "prelude.scm")
+(include "logging.scm")
+(include "model.scm")
+
+(define (make-client-info-gauche :key (implementation-version #f) (implementation-mode #f))
+  (%make-client-info "gauche" implementation-version implementation-mode))
+
+(define (make-request method :key (text-document #f) (text-at-point #f)
+                      (params '()) (trace-level #f) (accept-type #f))
+  (%make-request method text-document text-at-point params trace-level accept-type))
+#+end_src
+
+***** Guile-specific code
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/common/model-guile.scm
+:END:
+
+To just test the bindings imported and exported from that module, run the following:
+
+#+begin_src shell
+guile  -L "./guile" -L "./common" -c "(use-modules (sdp common model-guile)) (list make-client-info-guile make-request)"
+#+end_src
+
+#+begin_src my-scheme-guile
+;;; Module wrapping access to the data model for Guile Scheme
+;;; Commentary:
+
+;;; Code:
+
+(define-module (sdp common model-guile)
+  #:use-module (ice-9 match)
+  #:use-module (srfi srfi-9)
+  #:export (<client-info?> make-generic-client-info make-unknown-client-info client-info-implementation-name)
+  #:export (make-request request->response make-dispatch-handler)
+  #:export (make-client-info-guile))
+
+(include-from-path "sdp/common/prelude.scm")
+(include-from-path "sdp/common/logging.scm")
+(include-from-path "sdp/common/model.scm")
+
+(define* (make-client-info-guile #:key (implementation-version #f) (implementation-mode #f))
+  (%make-client-info "guile" implementation-version implementation-mode))
+
+(define* (make-request method #:key
+                       (text-document #f) (text-at-point #f) (params '()) (trace-level #f) (accept-type #f))
+  (%make-request method text-document text-at-point params trace-level accept-type))
+#+end_src
+
+**** Accessing built-in Scheme-specific documentation
+
+***** Gauche-specific code
+:PROPERTIES:
+:header-args:my-scheme-gauche: :tangle src/gauche/sdp/common/repl-gauche.scm
+:END:
+
+#+begin_src my-scheme-gauche
+;;; Module wrapping access to the REPL helpers supporting reading built-in documentation for Gauche Scheme
+;;; Commentary:
+;;   Below we define some of the handler procedures dispatched by the handler created with `make-dispatch-handler'.
+;;   These handler procedures will usually be called with an argument list, where the first element is the client info
+;;   and - where required - the second element is the text-at-point.
+
+;;; Code:
+
+(define-module sdp.common.repl-gauche
+  (use util.match)
+  (use gauche.parameter)
+  (use gauche.modutil :prefix modutil:)
+  (use gauche.interactive :prefix repl:)
+  (use srfi-13 :prefix string:)
+  (use srfi-64 :prefix test:)
+  (use sdp.common.model-gauche)
+  (export built-in-describe-object built-in-apropos-fragment)
+  (export test))
+(select-module sdp.common.repl-gauche)
+
+(include "prelude.scm")
+(include "logging.scm")
+
+(define (built-in-describe-object client-info text-at-point)
+  ;; {gauche-root}/lib/gauche/interactive.scm -> define-method describe -> describe-symbol-bindings
+  ;;   -> {gauche-root}/lib/gauche/modutil.scm
+  ;;      -> (use gauche.modutil) (describe-symbol-bindings 'format)
+  ;; Note: also supports module argument; to find module by symbol, use: (find-module module)
+  (with-output-to-string
+    (lambda () (modutil:describe-symbol-bindings (string->symbol text-at-point)))))
+
+(define (built-in-apropos-fragment client-info text-at-point)
+  ;; {gauche-root}/lib/gauche/interactive.scm -> (%apropos item module stay-in-module)
+  (with-output-to-string
+    (lambda () (repl:apropos (string->symbol text-at-point)))))
+
+(define (test)
+  (test:test-begin "test-repl-gauche")
+  (test:test-assert (string:string-contains (built-in-describe-object (make-client-info-gauche) "format")
+                                             "#<closure (format . args)>"))
+  (test:test-assert (string:string-contains (built-in-apropos-fragment (make-client-info-gauche) "open")
+                                            "%open-input-file/conv"))
+  (test:test-end "test-repl-gauche"))
+#+end_src
+
+***** Guile-specific code
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/common/repl-guile.scm
+:END:
+
+#+begin_src my-scheme-guile
+;;; Module wrapping access to the REPL helpers supporting reading built-in documentation for Guile Scheme
+;;; Commentary:
+;;   Below we define some of the handler procedures dispatched by the handler created with `make-dispatch-handler'.
+;;   These handler procedures will usually be called with an argument list, where the first element is the client info
+;;   and - where required - the second element is the text-at-point.
+
+;;; Code:
+
+(define-module (sdp common repl-guile)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 receive)
+  #:use-module (ice-9 documentation)
+  #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module ((srfi srfi-64) #:prefix test:)
+  #:use-module (sdp common model-guile)
+  #:export (built-in-describe-object built-in-apropos-fragment)
+  #:export (test))
+
+;; (system repl server) ; main module of repl server. That one is not required here, but it's calling:
+;;   -> {guile-root}/module/system/repl/server.scm
+;;      -> {guile-root}/module/system/repl/command.scm -> *command-table*
+;;         -> {guile-root}/module/ice-9/documentation.scm -> object-documentation, search-documentation-files
+
+(include-from-path "sdp/common/prelude.scm")
+(include-from-path "sdp/common/logging.scm")
+
+(define (built-in-describe-object client-info text-at-point)
+  ;; Note: Object documentation is only available for a few symbols, otherwise returns #f
+  ;; Note: the meta-command for `describe' uses `eval' during documentation search under some conditions, we only allow
+  ;; a limited search here:
+  ;; Note: `object-documentation' also uses `search-documentation-files', but only in the branch that is initially
+  ;;   eval'ing the symbol-at-point, so we won't find all results with the code below as we do with the `,describe'
+  ;;   command in the REPL - as long as we won't allow `eval' here. A compromise might be to allow eval when running in
+  ;;   the local API middleware but not when running the internet API server. It's a TODO: to support that.
+  (object-documentation
+   (module-ref (current-module) (string->symbol text-at-point))))
+
+(define (built-in-apropos-fragment client-info text-at-point)
+  ;; Searches documentation in list of files defined by `documentation-files'.
+  (search-documentation-files (string->symbol text-at-point)))
+
+(define (test)
+  (test:test-begin "test-repl-guile")
+  (test:test-assert (string:string-contains (built-in-describe-object (make-client-info-guile) "or-map")
+                                            "Apply F to successive elements of LST"))
+  (test:test-assert (string:string-contains (built-in-apropos-fragment (make-client-info-guile) "bind")
+                                            "Scheme Procedure: bind"))
+  (test:test-end "test-repl-guile"))
+#+end_src
+
+**** Reading metadata
+
+Some of the features provided by this application are implemented by accessing the schemedoc metadata defined in this
+repository: https://github.com/schemedoc/implementation-metadata. The files from this repository are expected locally in
+a filesystem folder, which needs to be passed to the helper procedures defined below. The helper procedures wrap the
+access to the metadata, as far as the content is related to the Scheme documentation.
+
+***** Implementation-independent code
+:PROPERTIES:
+:header-args:my-scheme: :tangle src/common/sdp/common/metadata.scm
+:END:
+
+We start with some minimal support for debug-logging and command line parsing. We might move this CLI-related code to a
+modul of its own later, but for now the CLI arguments are mostly used to augment the metadata, so adding this code here
+is not too much of a hack - and saves us another set of wrapping modules per implementation.
+
+Relevant documentation links:
+
+- https://practical-scheme.net/gauche/man/gauche-refe/A-program-argument-processor.html
+
+- https://www.gnu.org/software/guile/manual/html_node/SRFI_002d37.html#SRFI_002d37
+
+- https://srfi.schemers.org/srfi-37/srfi-37.html
+
+#+begin_src my-scheme
+(define +schemedoc-host-address+
+  (make-parameter "github.com" (lambda (v) (format #f "~a" v))))
+(define +schemedoc-port+
+  (make-parameter 9090 (lambda (v) (if (number? v) v (string->number v)))))
+(define +schemedoc-repl+                ; guile default REPL port: 37146
+  (make-parameter 37146 (lambda (v) (if (number? v) v (string->number v)))))
+
+;; TODO: It's probably best to put this into a `init-args' procedure and call that from each including program. Then we
+;;   can also pass arguments for version and usage.
+;;   Also for now, I'm just collecting whatever arguments might be interesting, even if not every CLI using that will
+;;   require all arguments.
+(let ((cl-args (cond-expand (gauche (command-line)) (guile (cdr (command-line))))))
+
+  (define (try-host-address arg host-address)
+    (cond-expand
+     (gauche
+      (if (sys-gethostbyname host-address)
+          ;; No `getaddrinfo' support with Gauche, and `sys-getaddrinfo' works differently, so use `sys-gethostbyname'
+          ;; (which is IPv4 only). `sys-gethostbyname' returns #f, if address cannot be resolved.
+          host-address
+          (begin
+            (warn "Cannot find host" arg host-address)
+            host-address)))
+     (guile
+      ;; If Guile's `getaddrinfo' cannot resolve the host address, it will raise an exception that cannot be caught by
+      ;; SRFI-34's `with-exception-handler' and `guard', so we need to use the Guile-specific catch instead.
+      (catch 'getaddrinfo-error
+        (lambda ()
+          (getaddrinfo host-address)
+          host-address)
+        (lambda (key error-code)
+          (begin
+            (warn "Cannot find host" arg host-address key error-code)
+            host-address))))))
+
+  (define (must-host-address arg host-address)
+    (cond-expand
+     (gauche                            ; see `try-host-address'
+      (if (sys-gethostbyname host-address)
+          host-address
+          (error-exit "Cannot find host" arg host-address)))
+     (guile                             ; see `try-host-address'
+      (catch 'getaddrinfo-error
+             (lambda ()
+               (getaddrinfo host-address)
+               host-address)
+             (lambda (key error-code)
+               (error-exit "Cannot find host" arg host-address key error-code))))))
+
+  (define (must-number arg val)
+    (if (number? val)
+        val
+        (let ((i (string->number val)))
+          (if i
+              i
+              (error-exit "Not an integer" arg val)))))
+
+  (define (must-number-or-boolean arg val f-val t-val)
+    (cond
+     ((number? val) val)
+     ((or (and (boolean? val) (not val))
+          (and (string? val) (string=? val "#f")))
+      f-val)
+     ((or (and (boolean? val) val)
+          (and (string? val) (string=? val "#t")))
+      t-val)
+     (else (must-number arg val))))
+
+  (info "Defaults: "
+        (+%%debug-level+) (+schemedoc-host-address+) (+schemedoc-port+) (+schemedoc-repl+))
+
+  (receive (p-debug-level p-host p-port p-repl)
+      (args:args-fold cl-args
+                      (let ((display-and-exit-proc
+                             (lambda (msg)
+                               (lambda (opt name arg . seeds)
+                                 (display msg) (quit)))))
+                        (list (args:option '(#\v "version") #f #f
+                                           (display-and-exit-proc "Foo version 42.0\n"))
+                              (args:option '(#\h "help") #f #f
+                                           (display-and-exit-proc
+                                            "Usage: foo scheme-file ..."))
+                              (args:option '(#\d "debug") #f #t
+                                           (lambda (opt name arg debug host port repl)
+                                             (values (or arg (+%%debug-level+)) host port repl)))
+                              (args:option '(#\a "hostaddress") #f #t
+                                           (lambda (opt name arg debug host port repl)
+                                             (let ((addr (and arg (try-host-address 'host arg))))
+                                               (values debug (or arg (+schemedoc-host-address+)) port repl))))
+                              (args:option '(#\p "port") #f #t
+                                           (lambda (opt name arg debug host port repl)
+                                             (values debug host (or arg (+schemedoc-port+)) repl)))
+                              (args:option '(#\r "repl") #f #t
+                                           (lambda (opt name arg debug host port repl)
+                                             (lambda (opt name arg debug host port repl)
+                                               (values debug host port (or arg (+schemedoc-repl+))))))))
+                      (lambda (opt name arg . seeds)
+                        (format (current-error-port) "Unrecognized option `~A'" name))
+                      (lambda (op debug host port repl)
+                        (values debug host port repl))
+                      (+%%debug-level+)
+                      (+schemedoc-host-address+)
+                      (+schemedoc-port+)
+                      (+schemedoc-repl+))
+    ;; initialize defaults:
+    (+%%debug-level+          (must-number-or-boolean 'debug-level p-debug-level 0 999))
+    (+schemedoc-host-address+ (try-host-address       'host        p-host))
+    (+schemedoc-port+         (must-number            'port        p-port))
+    (+schemedoc-repl+         (must-number            'repl        p-repl)))
+
+  (info "Command line parsed: "
+        (+%%debug-level+) (+schemedoc-host-address+) (+schemedoc-port+) (+schemedoc-repl+)))
+#+end_src
+
+#+begin_src my-scheme
+;; Note: below we define some of the handler procedures dispatched by the handler created with `make-dispatch-handler'.
+;;   These handler procedures will usually be called with an argument list, where the first element is the client info
+;;   and - where required - the second element is the text-at-point.
+
+(define +dflt-get-scheme-index-url+
+  ;; Symbol index URL used as default for the case where Scheme-implementation metadata cannot be found.
+  (make-parameter (lambda _ "https://practical-scheme.net/wiliki/schemexref.cgi?R7RS")))
+
+(define +dflt-get-scheme-query-url+
+  ;; Symbol query URL used as default for the case where Scheme-implementation metadata cannot be found.
+  ;; This URL is supposed to work as a prefix for the symbol to be searched for.
+  (make-parameter (lambda args (string-append "https://practical-scheme.net/wiliki/schemexref.cgi?" (cadr args)))))
+
+(define mappers
+  `((scheme-index-url (// documentation web-url *text*)
+                      ,(lambda (child) (lambda _ child))
+                      ,(+dflt-get-scheme-index-url+))
+    (scheme-query-url (// documentation search-url *text*)
+                      ,(lambda (child) (lambda args (string-append child (cadr args))))
+                      ,(+dflt-get-scheme-query-url+))))
+
+(define (%%try-get-metada-file-name md-path-name client-info)
+  (assert-pred <client-info?> client-info)
+  (let ((file-name (string-append md-path-name "/" (client-info-implementation-name client-info) ".scm")))
+    (debug '%%try-get-metada-file-name md-path-name file-name (file-exists? file-name))
+    (and (file-exists? file-name) file-name)))
+
+(define (%get-metadata-file md-path-name client-info slurp)
+  (let ((file-name (%%try-get-metada-file-name md-path-name client-info)))
+    (debug '%get-metadata-file md-path-name file-name)
+    (and file-name (call-with-input-file file-name slurp))))
+
+(define (%get-metadata md-path-name client-info)
+
+  (define (try-get-match form path builder)
+
+    (define (assert-procedure? p)
+      (if (procedure? p) p (error "Not a procedure" p)))
+
+    ;; Prepend *TOP*, so that we can add the car of the metadata from to the sxpath.
+    (let ((child ((xpath:sxpath path) (cons '*TOP* form))))
+      (if (and child (not (null? child)))
+          (assert-procedure? (builder (car child)))
+          #f)))
+
+  (define (add-defaults alist mappers)
+    (map
+     (match-lambda ((tag _ builder dflt)
+                    (let ((pair (assoc tag alist)))
+                      (or pair (cons tag dflt)))))
+     mappers))
+
+  (let ((file-name (%%try-get-metada-file-name md-path-name client-info)))
+    (if file-name
+        (call-with-input-file file-name
+          (lambda (p)
+            (let loop ((form (read p))
+                       (alist '()))
+              (if (eof-object? form)
+                  (add-defaults alist mappers)
+                  (loop (read p)
+                        (append alist
+                                (filter identity
+                                        (map
+                                         (match-lambda ((tag path builder _)
+                                                        (let ((p (try-get-match form path builder)))
+                                                          (and p (cons tag p)))))
+                                         mappers))))))))
+        (add-defaults '() mappers))))
+#+end_src
+
+***** Gauche-specific code
+:PROPERTIES:
+:header-args:my-scheme-gauche: :tangle src/gauche/sdp/common/metadata-gauche.scm
+:END:
+
+#+begin_src my-scheme-gauche
+;;; Module wrapping access to the metadata for Gauche Scheme
+;;; Commentary:
+
+;;; Code:
+
+(define-module sdp.common.metadata-gauche
+  (use file.util)
+  (use util.match)
+  (use gauche.parameter)
+  (use gauche.net :only (sys-gethostbyname))
+  (use sxml.sxpath :prefix xpath:)
+  (use srfi-13 :prefix string:)
+  (use srfi-37 :prefix args:)
+  (use srfi-64 :prefix test:)
+  (use srfi-98 :prefix env:)
+  (use sdp.common.model-gauche)
+  (export +schemedoc-host-address+      ; command-line configurable parameters
+          +schemedoc-port+ +schemedoc-repl+)
+  (export get-metadata get-metadata-file)
+  (export test))
+(select-module sdp.common.metadata-gauche)
+
+(include "prelude.scm")
+(include "logging.scm")
+(include "metadata.scm")
+
+(define (%get-md-path)
+  (or (env:get-environment-variable "MD_PATH") "MD_PATH_UNKNOWN"))
+
+(define (get-metadata client-info)
+  (%get-metadata (%get-md-path) client-info))
+
+(define (get-metadata-file client-info)
+  (let ((data (%get-metadata-file (%get-md-path) client-info port->string)))
+    (if (and data (not (eof-object? data)))
+        data
+        "")))
+
+(define (test)
+
+  (define response-result
+    ;; we don't export `response-result' just for testing, so access the private binding:
+    (global-variable-ref (find-module 'sdp.common.model-gauche) 'response-result))
+
+  (test:test-begin "test-metadata-gauche")
+  (let* ((ci-gauche (make-client-info-gauche))
+         (md-gauche (get-metadata ci-gauche))
+         (dispatch-handler (make-dispatch-handler
+                            `((documentation-index-url atom ,(assoc-ref md-gauche 'scheme-index-url))
+                              (documentation-query-url atom ,(assoc-ref md-gauche 'scheme-query-url))))))
+    (test:test-assert (string:string-contains
+                       (response-result
+                        (request->response ci-gauche dispatch-handler
+                                           (make-request "documentation-index-url")))
+                       "index.html"))
+    (test:test-assert (string:string-contains (response-result
+                                               (request->response ci-gauche dispatch-handler
+                                                                  (make-request "documentation-query-url"
+                                                                                :text-at-point "format")))
+                                              "man/?p=format")))
+
+  (let* ((ci-unknown (make-unknown-client-info))
+         (md-unknown (get-metadata ci-unknown))
+         (dispatch-handler (make-dispatch-handler
+                            `((documentation-index-url atom ,(assoc-ref md-unknown 'scheme-index-url))
+                              (documentation-query-url atom ,(assoc-ref md-unknown 'scheme-query-url))))))
+    (test:test-assert (string:string-contains
+                       (response-result
+                        (request->response ci-unknown dispatch-handler
+                                           (make-request "documentation-index-url")))
+                       "schemexref.cgi?R7RS"))
+    (test:test-assert (string:string-contains (response-result
+                                               (request->response ci-unknown dispatch-handler
+                                                                  (make-request "documentation-query-url"
+                                                                                :text-at-point "format")))
+                                              "schemexref.cgi?format")))
+
+  (test:test-assert (string:string-contains (get-metadata-file (make-client-info-gauche)) "(title \"Gauche\")"))
+  (test:test-assert (string=? (get-metadata-file (make-unknown-client-info)) ""))
+  (test:test-end "test-metadata-gauche"))
+#+end_src
+
+***** Guile-specific code
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/common/metadata-guile.scm
+:END:
+
+#+begin_src my-scheme-guile
+;;; Module wrapping access to the metadata for Guile Scheme
+;;; Commentary:
+
+;;; Code:
+
+(define-module (sdp common metadata-guile)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 receive)
+  #:use-module (ice-9 textual-ports)            ; get-string-all
+  #:use-module ((sxml xpath) #:prefix xpath:)
+  #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module ((srfi srfi-37) #:prefix args:)
+  #:use-module ((srfi srfi-64) #:prefix test:)
+  #:use-module ((srfi srfi-98) #:prefix env:)
+  #:use-module (sdp common model-guile)
+  #:export (+schemedoc-host-address+            ; command-line configurable parameters
+            +schemedoc-port+ +schemedoc-repl+)
+  #:export (get-metadata get-metadata-file)     ; metadata helpers
+  #:export (test))                              ; test procedure
+
+(include-from-path "sdp/common/prelude.scm")
+(include-from-path "sdp/common/logging.scm")
+(include-from-path "sdp/common/metadata.scm")
+
+(define (%get-md-path)
+  (or (env:get-environment-variable "MD_PATH") "MD_PATH_UNKNOWN"))
+
+(define (get-metadata client-info)
+  (%get-metadata (%get-md-path) client-info))
+
+(define (get-metadata-file client-info)
+  (let ((data (%get-metadata-file (%get-md-path) client-info get-string-all)))
+    (if (and data (not (eof-object? data)))
+        data
+        "")))
+
+(define (test)
+
+  (define response-result
+    ;; we don't export `response-result' just for testing, so access the private binding:
+    (@@ (sdp common model-guile) response-result))
+
+  (test:test-begin "test-metadata-guile")
+  (let* ((ci-guile (make-client-info-guile))
+         (md-guile (get-metadata ci-guile))
+         (dispatch-handler (make-dispatch-handler
+                            `((documentation-index-url atom ,(assoc-ref md-guile 'scheme-index-url))
+                              (documentation-query-url atom ,(assoc-ref md-guile 'scheme-query-url))))))
+    (test:test-assert (string:string-contains
+                       (response-result
+                        (request->response ci-guile dispatch-handler
+                                           (make-request "documentation-index-url")))
+                       "guile/manual/"))
+    (test:test-assert (string:string-contains (response-result
+                                               (request->response ci-guile dispatch-handler
+                                                                  (make-request "documentation-query-url"
+                                                                                #:text-at-point "format")))
+                                              "schemexref.cgi?format")))
+
+  (let* ((ci-unknown (make-unknown-client-info))
+         (md-unknown (get-metadata ci-unknown))
+         (dispatch-handler (make-dispatch-handler
+                            `((documentation-index-url atom ,(assoc-ref md-unknown 'scheme-index-url))
+                              (documentation-query-url atom ,(assoc-ref md-unknown 'scheme-query-url))))))
+    (test:test-assert (string:string-contains
+                       (response-result
+                        (request->response ci-unknown dispatch-handler
+                                           (make-request "documentation-index-url")))
+                       "schemexref.cgi?R7RS"))
+    (test:test-assert (string:string-contains (response-result
+                                               (request->response ci-unknown dispatch-handler
+                                                                  (make-request "documentation-query-url"
+                                                                                #:text-at-point "format")))
+                                              "schemexref.cgi?format")))
+
+  (test:test-assert (string:string-contains (get-metadata-file (make-client-info-guile)) "(title \"Guile\")"))
+  (test:test-assert (string=? (get-metadata-file (make-unknown-client-info)) ""))
+  (test:test-end "test-metadata-guile"))
+#+end_src
+
+*** API server, implemented in Guile Scheme
+
+The API server is implemented as a HTTP server, so it will run as a central instance and hence there is no (urgent) need
+to implement it in a portable way. The current implementation is using Guile Scheme.
+
+The HTTP API server obviously exposes its features as HTTP requests/responses, where each supported URL exposes one
+specific documentation feature, where each such feature is provided by one of the lower-level modules, e.g. the modules
+wrapping access to the metadata or the REPL-specific documentation helpers.
+
+Note that since the server is implemented dependent from a specific Scheme dialect, we can only support the
+implementation of that specific Scheme for those features, that forward documentation-search to Scheme-specific code.
+Concretely we can e.g. only call the Guile-specific REPL documentation helpers from Guile in the API server.
+
+**** HTTP server
+
+***** SXML->HTML
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/server/html.scm
+:END:
+
+The helper procedure to convert from an S-expression to HTML is taken from here:
+https://dthompson.us/rendering-html-with-sxml-and-gnu-guile.html.
+
+#+begin_src my-scheme-guile
+;; Copyright © 2015  David Thompson <davet@gnu.org>
+;;
+;; This library is free software; you can redistribute it and/or
+;; modify it under the terms of the GNU Lesser General Public License
+;; as published by the Free Software Foundation; either version 3 of
+;; the License, or (at your option) any later version.
+;;
+;; This library is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;; Lesser General Public License for more details.
+;;
+;; You should have received a copy of the GNU Lesser General Public
+;; License along with this library.  If not, see
+;; <http://www.gnu.org/licenses/>.
+
+(define-module (sdp server html)
+  #:use-module (sxml simple)
+  #:use-module (srfi srfi-26)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 format)
+  #:use-module (ice-9 hash-table)
+  #:export (sxml->html))
+
+(define %void-elements
+  '(area
+    base
+    br
+    col
+    command
+    embed
+    hr
+    img
+    input
+    keygen
+    link
+    meta
+    param
+    source
+    track
+    wbr))
+
+(define (void-element? tag)
+  "Return #t if TAG is a void element."
+  (pair? (memq tag %void-elements)))
+
+(define %escape-chars
+  (alist->hash-table
+   '((#\" . "quot")
+     (#\& . "amp")
+     (#\' . "apos")
+     (#\< . "lt")
+     (#\> . "gt")
+     (#\¡ . "iexcl")
+     (#\¢ . "cent")
+     (#\£ . "pound")
+     (#\¤ . "curren")
+     (#\¥ . "yen")
+     (#\¦ . "brvbar")
+     (#\§ . "sect")
+     (#\¨ . "uml")
+     (#\© . "copy")
+     (#\ª . "ordf")
+     (#\« . "laquo")
+     (#\¬ . "not")
+     (#\® . "reg")
+     (#\¯ . "macr")
+     (#\° . "deg")
+     (#\± . "plusmn")
+     (#\² . "sup2")
+     (#\³ . "sup3")
+     (#\´ . "acute")
+     (#\µ . "micro")
+     (#\¶ . "para")
+     (#\· . "middot")
+     (#\¸ . "cedil")
+     (#\¹ . "sup1")
+     (#\º . "ordm")
+     (#\» . "raquo")
+     (#\¼ . "frac14")
+     (#\½ . "frac12")
+     (#\¾ . "frac34")
+     (#\¿ . "iquest")
+     (#\À . "Agrave")
+     (#\Á . "Aacute")
+     (#\Â . "Acirc")
+     (#\Ã . "Atilde")
+     (#\Ä . "Auml")
+     (#\Å . "Aring")
+     (#\Æ . "AElig")
+     (#\Ç . "Ccedil")
+     (#\È . "Egrave")
+     (#\É . "Eacute")
+     (#\Ê . "Ecirc")
+     (#\Ë . "Euml")
+     (#\Ì . "Igrave")
+     (#\Í . "Iacute")
+     (#\Î . "Icirc")
+     (#\Ï . "Iuml")
+     (#\Ð . "ETH")
+     (#\Ñ . "Ntilde")
+     (#\Ò . "Ograve")
+     (#\Ó . "Oacute")
+     (#\Ô . "Ocirc")
+     (#\Õ . "Otilde")
+     (#\Ö . "Ouml")
+     (#\× . "times")
+     (#\Ø . "Oslash")
+     (#\Ù . "Ugrave")
+     (#\Ú . "Uacute")
+     (#\Û . "Ucirc")
+     (#\Ü . "Uuml")
+     (#\Ý . "Yacute")
+     (#\Þ . "THORN")
+     (#\ß . "szlig")
+     (#\à . "agrave")
+     (#\á . "aacute")
+     (#\â . "acirc")
+     (#\ã . "atilde")
+     (#\ä . "auml")
+     (#\å . "aring")
+     (#\æ . "aelig")
+     (#\ç . "ccedil")
+     (#\è . "egrave")
+     (#\é . "eacute")
+     (#\ê . "ecirc")
+     (#\ë . "euml")
+     (#\ì . "igrave")
+     (#\í . "iacute")
+     (#\î . "icirc")
+     (#\ï . "iuml")
+     (#\ð . "eth")
+     (#\ñ . "ntilde")
+     (#\ò . "ograve")
+     (#\ó . "oacute")
+     (#\ô . "ocirc")
+     (#\õ . "otilde")
+     (#\ö . "ouml")
+     (#\÷ . "divide")
+     (#\ø . "oslash")
+     (#\ù . "ugrave")
+     (#\ú . "uacute")
+     (#\û . "ucirc")
+     (#\ü . "uuml")
+     (#\ý . "yacute")
+     (#\þ . "thorn")
+     (#\ÿ . "yuml")
+     (#\Œ . "OElig")
+     (#\œ . "oelig")
+     (#\Š . "Scaron")
+     (#\š . "scaron")
+     (#\Ÿ . "Yuml")
+     (#\ƒ . "fnof")
+     (#\ˆ . "circ")
+     (#\˜ . "tilde")
+     (#\Α . "Alpha")
+     (#\Β . "Beta")
+     (#\Γ . "Gamma")
+     (#\Δ . "Delta")
+     (#\Ε . "Epsilon")
+     (#\Ζ . "Zeta")
+     (#\Η . "Eta")
+     (#\Θ . "Theta")
+     (#\Ι . "Iota")
+     (#\Κ . "Kappa")
+     (#\Λ . "Lambda")
+     (#\Μ . "Mu")
+     (#\Ν . "Nu")
+     (#\Ξ . "Xi")
+     (#\Ο . "Omicron")
+     (#\Π . "Pi")
+     (#\Ρ . "Rho")
+     (#\Σ . "Sigma")
+     (#\Τ . "Tau")
+     (#\Υ . "Upsilon")
+     (#\Φ . "Phi")
+     (#\Χ . "Chi")
+     (#\Ψ . "Psi")
+     (#\Ω . "Omega")
+     (#\α . "alpha")
+     (#\β . "beta")
+     (#\γ . "gamma")
+     (#\δ . "delta")
+     (#\ε . "epsilon")
+     (#\ζ . "zeta")
+     (#\η . "eta")
+     (#\θ . "theta")
+     (#\ι . "iota")
+     (#\κ . "kappa")
+     (#\λ . "lambda")
+     (#\μ . "mu")
+     (#\ν . "nu")
+     (#\ξ . "xi")
+     (#\ο . "omicron")
+     (#\π . "pi")
+     (#\ρ . "rho")
+     (#\ς . "sigmaf")
+     (#\σ . "sigma")
+     (#\τ . "tau")
+     (#\υ . "upsilon")
+     (#\φ . "phi")
+     (#\χ . "chi")
+     (#\ψ . "psi")
+     (#\ω . "omega")
+     (#\ϑ . "thetasym")
+     (#\ϒ . "upsih")
+     (#\ϖ . "piv")
+     (#\  . "ensp")
+     (#\  . "emsp")
+     (#\  . "thinsp")
+     (#\– . "ndash")
+     (#\— . "mdash")
+     (#\‘ . "lsquo")
+     (#\’ . "rsquo")
+     (#\‚ . "sbquo")
+     (#\“ . "ldquo")
+     (#\” . "rdquo")
+     (#\„ . "bdquo")
+     (#\† . "dagger")
+     (#\‡ . "Dagger")
+     (#\• . "bull")
+     (#\… . "hellip")
+     (#\‰ . "permil")
+     (#\′ . "prime")
+     (#\″ . "Prime")
+     (#\‹ . "lsaquo")
+     (#\› . "rsaquo")
+     (#\‾ . "oline")
+     (#\⁄ . "frasl")
+     (#\€ . "euro")
+     (#\ℑ . "image")
+     (#\℘ . "weierp")
+     (#\ℜ . "real")
+     (#\™ . "trade")
+     (#\ℵ . "alefsym")
+     (#\← . "larr")
+     (#\↑ . "uarr")
+     (#\→ . "rarr")
+     (#\↓ . "darr")
+     (#\↔ . "harr")
+     (#\↵ . "crarr")
+     (#\⇐ . "lArr")
+     (#\⇑ . "uArr")
+     (#\⇒ . "rArr")
+     (#\⇓ . "dArr")
+     (#\⇔ . "hArr")
+     (#\∀ . "forall")
+     (#\∂ . "part")
+     (#\∃ . "exist")
+     (#\∅ . "empty")
+     (#\∇ . "nabla")
+     (#\∈ . "isin")
+     (#\∉ . "notin")
+     (#\∋ . "ni")
+     (#\∏ . "prod")
+     (#\∑ . "sum")
+     (#\− . "minus")
+     (#\∗ . "lowast")
+     (#\√ . "radic")
+     (#\∝ . "prop")
+     (#\∞ . "infin")
+     (#\∠ . "ang")
+     (#\∧ . "and")
+     (#\∨ . "or")
+     (#\∩ . "cap")
+     (#\∪ . "cup")
+     (#\∫ . "int")
+     (#\∴ . "there4")
+     (#\∼ . "sim")
+     (#\≅ . "cong")
+     (#\≈ . "asymp")
+     (#\≠ . "ne")
+     (#\≡ . "equiv")
+     (#\≤ . "le")
+     (#\≥ . "ge")
+     (#\⊂ . "sub")
+     (#\⊃ . "sup")
+     (#\⊄ . "nsub")
+     (#\⊆ . "sube")
+     (#\⊇ . "supe")
+     (#\⊕ . "oplus")
+     (#\⊗ . "otimes")
+     (#\⊥ . "perp")
+     (#\⋅ . "sdot")
+     (#\⋮ . "vellip")
+     (#\⌈ . "lceil")
+     (#\⌉ . "rceil")
+     (#\⌊ . "lfloor")
+     (#\⌋ . "rfloor")
+     (#\〈 . "lang")
+     (#\〉 . "rang")
+     (#\◊ . "loz")
+     (#\♠ . "spades")
+     (#\♣ . "clubs")
+     (#\♥ . "hearts")
+     (#\♦ . "diams"))))
+
+(define (string->escaped-html s port)
+  "Write the HTML escaped form of S to PORT."
+  (define (escape c)
+    (let ((escaped (hash-ref %escape-chars c)))
+      (if escaped
+          (format port "&~a;" escaped)
+          (display c port))))
+  (string-for-each escape s))
+
+(define (object->escaped-html obj port)
+  "Write the HTML escaped form of OBJ to PORT."
+  (string->escaped-html
+   (call-with-output-string (cut display obj <>))
+   port))
+
+(define (attribute-value->html value port)
+  "Write the HTML escaped form of VALUE to PORT."
+  (if (string? value)
+      (string->escaped-html value port)
+      (object->escaped-html value port)))
+
+(define (attribute->html attr value port)
+  "Write ATTR and VALUE to PORT."
+  (format port "~a=\"" attr)
+  (attribute-value->html value port)
+  (display #\" port))
+
+(define (element->html tag attrs body port)
+  "Write the HTML TAG to PORT, where TAG has the attributes in the
+list ATTRS and the child nodes in BODY."
+  (format port "<~a" tag)
+  (for-each (match-lambda
+             ((attr value)
+              (display #\space port)
+              (attribute->html attr value port)))
+            attrs)
+  (if (and (null? body) (void-element? tag))
+      (display " />" port)
+      (begin
+        (display #\> port)
+        (for-each (cut sxml->html <> port) body)
+        (format port "</~a>" tag))))
+
+(define (doctype->html doctype port)
+  (format port "<!DOCTYPE ~a>" doctype))
+
+(define* (sxml->html tree #:optional (port (current-output-port)))
+  "Write the serialized HTML form of TREE to PORT."
+  (match tree
+    (() *unspecified*)
+    (('doctype type)
+     (doctype->html type port))
+    ;; Unescaped, raw HTML output
+    (('raw html)
+     (display html port))
+    (((? symbol? tag) ('@ attrs ...) body ...)
+     (element->html tag attrs body port))
+    (((? symbol? tag) body ...)
+     (element->html tag '() body port))
+    ((nodes ...)
+     (for-each (cut sxml->html <> port) nodes))
+    ((? string? text)
+     (string->escaped-html text port))
+    ;; Render arbitrary Scheme objects, too.
+    (obj (object->escaped-html obj port))))
+#+end_src
+
+***** Server runner
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/server/http.scm
+:END:
+
+The code below is mostly a hack/stub, which currently just tests the end-to-end call chain from the request dispatcher
+to response generation, dispatching from the requested URL-infix and the related feature to the lower-level
+implementation of that feature.
+
+Relevant documentation links for the Guile HTTP server:
+
+- https://www.gnu.org/software/guile/manual/html_node/Web-Examples.html
+
+- http://git.savannah.gnu.org/cgit/guile.git/tree/module/web/server.scm?h=lightening
+
+#+begin_src my-scheme-guile
+(define-module (sdp server http)
+  #:use-module (ice-9 binary-ports)     ; get-bytevector-all
+  #:use-module (ice-9 match)
+  #:use-module (web server)
+  #:use-module (web request)
+  #:use-module (web response)
+  #:use-module (web uri)
+  #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module ((srfi srfi-64) #:prefix test:)
+  #:use-module (sdp common model-guile)
+  #:use-module (sdp common repl-guile)
+  #:use-module (sdp common metadata-guile)
+  #:use-module (sdp server html)
+  #:export (http-server)
+  #:export (test))
+
+(define (request-path-components request)
+  (split-and-decode-uri-path (uri-path (request-uri request))))
+
+(define (request-query-components request)
+  ;; -> (alist-of (cons name value))
+  (let ((query (uri-query (request-uri request))))
+    (if query
+        (map (lambda (query-component)
+               (let ((name+value (string-split query-component #\=)))
+                 (cons (string->symbol (car name+value)) (car (cdr name+value)))))
+             (filter
+              (lambda (query-component) (not (string-null? query-component)))
+              (map uri-decode (string-split query #\&))))
+        '())))
+
+(define (request-header-ref request header)
+  (assoc-ref (request-headers request) header))
+
+(define (render-html sxml)
+  (values '((content-type . (text/html))) ; defaults to  #:code 200
+          (lambda (port) (sxml->html sxml port))))
+
+(define (render-simple-html title body)
+
+  (define (template title body)
+    `((doctype "html")
+      (html
+       (head
+        (meta (@ (charset "utf-8")))
+        (title ,title))
+       (body
+        (div (@ (id "body"))
+             (div (h1 ,title))
+             ,@body                       ; TODO: ,body or ,@
+             (div (span "Powered by GNU Guile")))))))
+
+  (render-html (template title body)))
+
+(define (render-file mime-type file-name)
+  (values `((content-type . (,mime-type))) ; defaults to  #:code 200
+          (call-with-input-file file-name get-bytevector-all)))
+
+(define* (http-ok #:optional msg)
+  (values (build-response #:code 200 #:headers '((content-type . (text/plain))))
+          (if msg (lambda (port) (write msg port)) "")))
+
+(define* (http-created uri #:optional msg)
+  (values (build-response #:code 201 #:headers `((content-type . (text/plain)) (Location . ,uri)))
+          (if msg (lambda (port) (write msg port)) "")))
+
+(define (redirect uri)
+  (values (build-response #:code 303 #:headers `((Location . ,uri))) ""))
+
+(define (bad-request error-msg)
+  (values (build-response #:code 400 #:headers '((content-type . (text/plain))))
+          (lambda (port) (write error-msg port))))
+
+(define (http-forbidden)
+  (values (build-response #:code 403)
+          "Forbidden"))
+
+(define (not-found request)
+  (values (build-response #:code 404)
+          (string-append "Resource not found: "
+                         (uri->string (request-uri request))
+                         ", Method: " (symbol->string (request-method request))
+                         ", Path: "   (string-join (request-path-components request) "/"))))
+
+(define (server-error)
+  (values (build-response #:code 500) "Internal Server Error"))
+#+end_src
+
+#+begin_src my-scheme-guile
+(include-from-path "sdp/common/prelude.scm")
+(include-from-path "sdp/common/logging.scm")
+
+(define dispatch-handler
+  (let ((md (get-metadata (make-client-info-guile))))
+    (make-dispatch-handler
+     `((documentation-index-url   atom  ,(assoc-ref md 'scheme-index-url))
+       (documentation-query-url   atom  ,(assoc-ref md 'scheme-query-url))
+       (built-in-describe-object  atom  ,built-in-describe-object)
+       (built-in-apropos-fragment atom  ,built-in-apropos-fragment)))))
+
+(define (test)
+  (test:test-begin "test-http-server-guile")
+  (let ((client-info (make-client-info-guile)))
+    (display (request->response client-info dispatch-handler (make-request "documentation-index-url")))
+    (display (request->response client-info dispatch-handler (make-request "documentation-query-url" #:text-at-point "format"))))
+  (test:test-end "test-http-server-guile"))
+#+end_src
+
+#+begin_src my-scheme-guile
+(define (api-handler request body)
+  ;; https://www.gnu.org/software/guile/manual/html_node/Requests.html#Requests
+  (let ((uri      (request-uri request))
+        (method   (request-method request))
+        (path-cs  (request-path-components request))
+        (query-cs (request-query-components request))
+        (ctype    (request-content-type request))
+        ;; (body    (if body (utf8->string body) #f))
+        ;; (body-string (utf8->string body))
+        ;; (member 'application/x-www-form-urlencoded ctype)
+        (upath   (uri-path (request-uri request)))
+        (query   (uri-query (request-uri request))))
+
+    ;; http://localhost:8080/
+    ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/" query: #f fragment: #f>
+    ;;      ...  GET/#f#f
+    ;; http://localhost:8080/foo/bar?dumm=doedel&dooh=ouch
+    ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/foo/bar" query: "dumm=doedel&dooh=ouch" fragment: #f>
+    ;;      ...  GETfoobar/foo/bar#fdumm=doedel&dooh=ouch
+    ;;           method         GET
+    ;;           path-cs        foobar
+    ;;           upath          /foo/bar
+    ;;           ctype          #f
+    ;;           query          dumm=doedel&dooh=ouch
+    ;;           query-cs       (dumm . doedel)(dooh . ouch)
+    (match (cons method path-cs)
+      (('GET . '())                     ; http://localhost:8080/
+       (render-simple-html "Index-Request"
+                           (list uri method path-cs upath ctype query query-cs)))
+      (('GET . ("api" "index" impl))   ; http://localhost:8080/api/index/guile
+       (render-simple-html "api-index-Request"
+                           (list uri method path-cs upath ctype query query-cs impl)))
+      (('GET . ("api" "query" impl symbol)) ; http://localhost:8080/api/query/guile/define
+       ;; TODO: add version -> query param or path part?
+       ;; TODO: add "mode", e.g. native, R7rs, ... -> query param or path part?
+       (render-simple-html "api-query-Request"
+                           (list uri method path-cs upath ctype query query-cs impl symbol)))
+      (('GET . ("foo" "bar"))          ; http://localhost:8080/foo/bar, http://localhost:8080/foo/bar?foo=f1&bar=b1...
+       (render-simple-html "Path-Request"
+                           (list uri method path-cs upath ctype query query-cs)))
+      (_ (not-found request)))))
+
+(define (http-server)
+  (info "Server start: " (+schemedoc-host-address+) (+schemedoc-port+))
+  (run-server api-handler))
+#+end_src
+
+*** API middleware and API client
+
+The API server also provided here supports a simple 2-tier architecture, where the client (usually the editor) can
+directly access that central HTTP server, no further infrastructure required.
+
+But as noted above for the API server, that one can only support some of the features for the Scheme implementation that
+has been used to implement that central API server. So there using that 2-tier architecture there is no way for the
+documentation infrastructure implemented in Guile Scheme to allow access to the Scheme-specific REPL documentation
+helpers from any other Scheme implementation - we need a local Scheme instance for the given dialect also to support
+that. So while complicating both the implementation as well as the setup of the documentation infrastructure, a local
+API middleware can in exchange provide some additional features:
+
+- Add additional features provided by a given Scheme's REPL, or similar documentation introspection.
+
+- Allow direct access to locally cached/bundled middleware without requiring access to the HTTP server.
+
+- Support both REPL access and socket access, using the =--listen= option from Guile's REPL. Socket access might allow
+  more complex communication between the client (editor) and the middleware and - other than a REPL-based middleware -
+  it can allow access from multiple clients to a single middleware instance.
+
+**** Guile API middleware and API client
+
+***** CLI Implementation
+:PROPERTIES:
+:header-args:my-scheme-guile: :tangle src/guile/sdp/client/client.scm
+:END:
+
+Relevant and/or interesting links:
+
+- https://www.gnu.org/software/guile/manual/html_node/Web-Client.html
+
+- http://git.savannah.gnu.org/cgit/guile.git/tree/module/system/repl/repl.scm
+
+- http://git.savannah.gnu.org/cgit/guix.git/tree/guix/http-client.scm
+
+- http://git.savannah.gnu.org/cgit/guix.git/tree/guix/scripts/repl.scm: guix repl
+
++ web client sample code (remove this item later):
+
+  + https://github.com/minhnhdo/mro/blob/master/web/client.scm: http-get-wrapper
+
+  + https://github.com/ijp/guile-ddg/blob/master/ddg.scm : using build-uri
+
+  + https://github.com/ijp/guildhall/blob/master/guildhall/repository.scm : http-download
+
+  + https://github.com/RoubyPA/guile-mastodon/blob/master/mastodon/api.scm: mastodon-api client
+
++ repl client sample code:
+
+  + https://github.com/artyom-poptsov/guile-ssh/blob/master/modules/ssh/dist/node.scm :
+    some regexp to parse guile repl results, e.g.: %repl-result-regexp; repl result parsing: rrepl-get-result;
+    starting repl in background ('%guile-listen-command "nohup guile --listen=~a 0<&- &>/dev/null"')
+
+  + https://github.com/ecraven/r7rs-swank/blob/master/specific/guile.scm:
+    generic r7rs-swank server, here for guile - also gambit, gauche, ...
+
+#+begin_src my-scheme-guile
+(define-module (sdp client client)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 receive)
+  #:use-module (web client)
+  #:use-module (web uri)
+  #:use-module (web response)
+  ;; (web request) (web http) ; also used by various client
+  ;; (system repl server) ; seems to be module of repl server
+  ;;    /home/frank/localsrc/guile-2.9.1/module/system/repl/server.scm
+  ;;    -> /home/frank/localsrc/guile-2.9.1/module/system/repl/command.scm -> *command-table*
+  ;;       -> /home/frank/localsrc/guile-2.9.1/module/ice-9/documentation.scm -> object-documentation
+  ;;                                                                          -> search-documentation-files
+  ;;    related: (system repl error-handling)
+  ;;    related ???: Use repl defined in ice-9 boot : (repl reader evaler printer)
+  #:use-module (sdp common metadata-guile)
+  #:export (main))
+
+(receive (response body)
+    ;; http://localhost:8080/api/query/guile/define
+    (http-get (build-uri 'http
+                         #:host "localhost" #:port 8080 #:path "/api/query/guile/define")
+              #:headers `((Accept . "text/plain"))
+              #:keep-alive? #t)
+  (display (list response body (response-code response) (response-reason-phrase response)))
+  (case (response-code response)
+    ((200)
+     (display (list 'OK (response-content-length response))))
+    ((301 302 303 307 308)
+     (display (list 'redirect
+                    (response-content-length response)
+                    (response-location response) ; #f; probably be set for redirect, e.g. 301, 302, ...
+                    )))
+    (else (display '?????))))
+
+;; (define (http-get->str url port path)
+;;   (let ((uri (build-uri 'http #:host url #:port port #:path path)))
+;;     (call-with-values
+;; 	(lambda () (http-get uri  #:keep-alive? #f))
+;;       (lambda (request body) body))))
+;; (display (http-get->str "www.foo.com" 8080 "/api/status"))
+
+(define (main)
+  (display 'main))
+#+end_src
+
+**** Gauche API middleware and API client
+
+- Same functionality as the Guile API client, just using Gauche Scheme.
