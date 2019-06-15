@@ -8,6 +8,7 @@ FORCE :
 MD_PATH         ?= ../../implementation-metadata
 DEBUG_OFF       ?= '--debug=\#f'
 DEBUG_ALL       ?= '--debug=\#t'
+
 .PHONY : run-http-server
 
 run-http-server :
@@ -16,10 +17,12 @@ run-http-server :
 run-test-http-server :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-http-server)"
 	echo "TODO:next: no use run-client-guile to perform some tests on server, then shutdown server"
+
 .PHONY : run-client-guile
 
 run-client-guile :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp client client)) (main)"
+
 .PHONY : test-repl test-repl-gauche test-repl-guile
 
 test-repl : test-repl-gauche test-repl-guile
@@ -32,6 +35,7 @@ test-repl-gauche :
 test-repl-guile :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp common repl-guile)) (test)" $(DEBUG_ALL)
 	tail -n2 test-repl-guile.log
+
 .PHONY : test-metadata test-metadata-gauche test-metadata-guile
 
 test-metadata : test-metadata-gauche test-metadata-guile
@@ -43,6 +47,7 @@ test-metadata-gauche :
 test-metadata-guile :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp common metadata-guile)) (test)" $(DEBUG_ALL)
 	tail -n2 test-metadata-guile.log
+
 .PHONY : test-render test-response
 
 test-render :
