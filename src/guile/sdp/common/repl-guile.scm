@@ -17,18 +17,15 @@
   #:export (built-in-describe-object built-in-apropos-fragment)
   #:export (test))
 
-;; (system repl server) ; main module of repl server. That one is not required here, but it's calling:
-;;   -> {guile-root}/module/system/repl/server.scm
-;;      -> {guile-root}/module/system/repl/command.scm -> *command-table*
-;;         -> {guile-root}/module/ice-9/documentation.scm -> object-documentation, search-documentation-files
-
 (include-from-path "sdp/common/prelude.scm")
 (include-from-path "sdp/common/logging.scm")
 
 (define (built-in-describe-object client-info text-at-point)
-  ;; Note: Object documentation is only available for a few symbols, otherwise returns #f
-  ;; Note: the meta-command for `describe' uses `eval' during documentation search under some conditions, we only allow
-  ;; a limited search here:
+  ;; (system repl server) ; main module of repl server. That one is not required here, but it's calling:
+  ;;   -> {guile-root}/module/system/repl/server.scm
+  ;;      -> {guile-root}/module/system/repl/command.scm -> *command-table*
+  ;;         -> {guile-root}/module/ice-9/documentation.scm -> object-documentation, search-documentation-files
+  ;; Note: Object documentation is only available for a few symbols, otherwise returns #f.
   ;; Note: `object-documentation' also uses `search-documentation-files', but only in the branch that is initially
   ;;   eval'ing the symbol-at-point, so we won't find all results with the code below as we do with the `,describe'
   ;;   command in the REPL - as long as we won't allow `eval' here. A compromise might be to allow eval when running in

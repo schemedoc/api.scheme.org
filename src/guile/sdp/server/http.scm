@@ -141,7 +141,7 @@
   ;; execute tests asserting expected results, but it simply displays the rendered output, assuming that that output
   ;; format is anyway due to change. So the code here is rather presenting how to use the API.
 
-  
+
   (define (%sxml->html-file sxml file-path)
     (call-with-output-file file-path
       (lambda (port)
@@ -205,7 +205,7 @@
   ;; request for each of our Scheme documentation APIs, using the default response renderer. The test procedure also
   ;; tests correct error handling for some typical error constellations. Again currently the test rather displays the
   ;; rendered output; it will be changed to assert expected output once the output format has been stabilized.
-  
+
   (test:test-begin "test-response-guile")
   (let ((client-info (model:make-client-info-guile)))
     (display (model:request->response client-info dispatch-handler (model:make-request "documentation-index-url")))
@@ -249,13 +249,16 @@
          (request-ctype    (request-content-type request '(text/html)))
          (request-charset  (or (assq-ref (cdr request-ctype) 'charset) "utf-8"))
          (request-atypes   (request-accept request '((text/html))))
-         (query-format     (request-query-component request 'format "html"))
-         (accept-type      (cond
-                            ((string=? query-format "sexp")  "application/sexp")
-                            ((string=? query-format "json")  "application/json")
-                            ((string=? query-format "html")  "text/html")
-                            ((string=? query-format "plain") "text/plain")
-                            (else (symbol->string (car (car request-atypes)))))))
+         (query-format     (request-query-component request 'format))
+         (accept-type      (let ((header-atype (symbol->string (car (car request-atypes)))))
+                             (if query-format
+                                 (cond
+                                  ((string=? query-format "sexp")  "application/sexp")
+                                  ((string=? query-format "json")  "application/json")
+                                  ((string=? query-format "html")  "text/html")
+                                  ((string=? query-format "plain") "text/plain")
+                                  (else header-atype))
+                                 header-atype))))
     (if (request-query-component request 'debug)
         (if test-mode?
             (render-simple-html (simple-format #f "API-method ~s" method)
