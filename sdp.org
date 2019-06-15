@@ -5,7 +5,7 @@
 #+DESCRIPTION: Xxx
 #+AUTHOR:   Frank Ruben (frankruben27@gmail.com)
 #+LANGUAGE: en
-#+DATE: 12-05-2019 21:50:17
+#+DATE: 24-05-2019 07:07:36
 #+STARTUP: showall
 #+OPTIONS: H:4
 #+OPTIONS: ^:{}
@@ -49,7 +49,7 @@ The following command line arguments are used for the various Schemes:
 
 all :
 
-test : test-repl test-metadata test-http-server
+test : test-repl test-metadata test-render test-response
 
 FORCE :
 #+end_src
@@ -65,6 +65,10 @@ DEBUG_ALL       ?= '--debug=\#t'
 
 run-http-server :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (http-server)"
+
+run-test-http-server :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-http-server)"
+	echo "TODO:next: no use run-client-guile to perform some tests on server, then shutdown server"
 #+end_src
 
 #+begin_src makefile
@@ -104,11 +108,15 @@ test-metadata-guile :
 #+end_src
 
 #+begin_src makefile
-.PHONY : test-http-server
+.PHONY : test-render test-response
 
-test-http-server :
-	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test)" $(DEBUG_ALL)
-	tail -n2 test-http-server-guile.log
+test-render :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-render)" $(DEBUG_ALL)
+	tail -n2 test-render-guile.log
+
+test-response :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-response)" $(DEBUG_ALL)
+	tail -n2 test-response-guile.log
 #+end_src
 
 ** Scheme sources
@@ -197,6 +205,15 @@ Some simple general-purpose helpers.
 (define (displayln . args)
   (for-each display args)
   (newline))
+
+(cond-expand
+ (gauche
+  (define (negate proc)
+    ;; Return a procedure that will negate the result of given PROC.
+    (compose proc not)))
+ (else
+  ;; Guile does already have `negate' defined, others not yet supported.
+  #t))
 #+end_src
 
 **** Minimal logging
@@ -291,7 +308,7 @@ General data model, usually implemented using record types as defined by [[https
 
   (define (or/false pred)
     ;; (-> boolean? (-> any boolean?)); the returned predicate returns true iff the passed object matches the given
-    ;;   predicate or its value is #f.
+    ;;   predicate or if its value is #f.
     (lambda (obj) (if obj (pred obj) #t)))
 
   (set! *request-counter* (+ *request-counter* 1))
@@ -336,52 +353,80 @@ General data model, usually implemented using record types as defined by [[https
                     (assert-pred pair? #|non-empty|# accept-documentation-format))))
 
 (define-record-type <response>
-  (%%make-response id method text-document text-at-point result error-code error-message
+  (%%make-response id method text-document text-at-point http-code result error-message
                    content-type content-encoding content-documentation-format)
   <response?>
   (id                           response-id)
   (method                       response-method)
   (text-document                response-text-document)
   (text-at-point                response-text-at-point)
+  (http-code                    response-http-code)
   (result                       response-result)
-  (error-code                   response-error-code)
-  (error-message                reponse-error-message)
+  (error-message                response-error-message)
   (content-type                 response-content-type)
   (content-encoding             response-content-encoding)
   (content-documentation-format response-content-documentation-format))
 
-(define (%make-response request result)
+(define (%make-response request http-code result)
   (assert-pred <request?> request)
   (%%make-response (request-id                          request)
                    (request-method                      request)
                    (request-text-document               request)
                    (request-text-at-point               request)
-                   (assert-pred string?                 result)
-                   #f
-                   #f
-                   (request-accept-type                 request)
-                   (request-accept-encoding             request)
-                   (request-accept-documentation-format request)))
+                   (assert-pred number?                 http-code)
+                   ;; `result' is not necessarily a string, might also be an s-exp; it just cannot be #f:
+                   (assert-pred identity                result)
+                   #f                                   ; error-message
+                   (assert-pred string?                 (request-accept-type request))
+                   (assert-pred string?                 (request-accept-encoding request))
+                   (assert-pred pair?                   (request-accept-documentation-format request))))
 
-(define (%make-error-response request error-code error-message)
+(define (%make-error-response request http-error-code error-message)
   (assert-pred <request?> request)
   (%%make-response (request-id                          request)
                    (request-method                      request)
                    (request-text-document               request)
                    (request-text-at-point               request)
-                   #f
-                   (assert-pred number?                 error-code)
-                   (assert-pred string?                 error-message)
+                   (assert-pred number?                 http-error-code)
+                   #f                                   ; result
+                   ;; `error-message' is not necessarily a string, might also be an s-exp; it just cannot be #f:
+                   (assert-pred identity                error-message)
                    (request-accept-type                 request)
                    (request-accept-encoding             request)
                    (request-accept-documentation-format request)))
 #+end_src
 
+The procdure below generates a procedure, which will execute an API method and format the results according to the MIME-type
+accepted by the request. Currently supported response formats are:
+
+- text/plain, supporting an additional "documentation format", which can be either plain text or markdown (which is not
+  yet implemented)
+
+- text/html
+
+- application/json
+
+- application/sexp
+
+And for that limited set of response formats again only a very limited set of imput types are supported:
+
+- atom: string, symbol, number
+
+- list of atoms
+
+- association list, supporting only the atom types noted above for keys and values
+
+- list of association lists
+
+JSON-support is also limited to just the input types just noted, and this is done using some hand-crafted and bare-bones
+builder. Whenever better JSON-support is required, the package [[https://www.gnu.org/software/guile/libraries/][guile-json]] with Github repo [[https://github.com/aconchillo/guile-json][here]] seems to be the way to
+go for Guile.
+
 #+begin_src my-scheme
 (define (make-dispatch-handler handler-list)
 
-  (define (%atom->string obj for-sexp?)
-    (let ((quoter (if for-sexp?
+  (define (%atom->string obj quoted?)
+    (let ((quoter (if quoted?
                       (lambda (s) (string-append (string #\") s (string #\")))
                       identity)))
       (cond
@@ -390,118 +435,199 @@ General data model, usually implemented using record types as defined by [[https
        ((symbol? obj) (quoter (symbol->string obj)))
        (else (error "Unexpected atom" obj)))))
 
-  (define (other->string obj)           ; no quotes
-    (with-output-to-string (lambda () (display obj))))
-
-  (define (sexp->string obj)            ; with quotes
-    (with-output-to-string (lambda () (write obj))))
-
-  (define (atom->other-string obj)
+  (define (atom->string obj)
     (%atom->string obj #f))
 
-  (define (atom->sexp-string obj)
+  (define (atom->qstring obj)
     (%atom->string obj #t))
 
-  (define (->list ->string)             ; ((->list atom->other-string) '(1 2 3))
+  ;; (define (unquoted->string obj)        ; no quotes
+  ;;   (with-output-to-string (lambda () (display obj))))
+
+  ;; (define (quoted->string obj)          ; with quotes
+  ;;   (with-output-to-string (lambda () (write obj))))
+
+  (define (->list ->string)             ; ((->list atom->string) '(1 2 3))
     (lambda (l) (map ->string l)))
 
-  (define (->alist ->string)            ; ((->alist atom->other-string) '((a . 1) (b . 2) (b . 3)))
+  (define (->alist ->string)            ; ((->alist atom->string) '((a . 1) (b . 2) (b . 3)))
     (lambda (al) (map (lambda (p) (cons (->string (car p)) (->string (cdr p)))) al)))
 
-  (define (->alists ->string)           ; ((->alists atom->other-string) '(((a . 1) (b . 2) (b . 3))))
+  (define (->alists ->string)           ; ((->alists atom->string) '(((a . 1) (b . 2) (b . 3))))
     (lambda (als) (map (lambda (al) ((->alist ->string) al)) als)))
+
+  ;; --- plain text builders
+
+  (define (alist->plain l)
+    (map (lambda (kv) (string-append (car kv) ": " (cdr kv))) ((->alist atom->string) l)))
+
+  (define (alists->plain ll)
+    (define ll-strs ((->alists atom->string) ll))
+    ;; '(((c1 . HC1) (c2 . HC2)) ((c1 . R1C1) (c2 . R1C2)) ((c1 . R2C1) (c2 . R2C2)))
+    ;;   -> HC1 \t HC2 \n R1C1 \t R1C2 \n R2C1 \t R2C2
+    (define headers (map cdr (car ll-strs)))
+    (define rows (map (lambda (l) (map cdr l)) (cdr ll-strs)))
+    (define (format-line l) (string-join l "\t"))
+    (string-join (map format-line (cons headers rows)) "\n"))
+
+  ;; --- html builders
+
+  (define (atom->html a)
+    ;; "some-string-arg" -> '(div some-string-arg)
+    `(div ,(atom->string a)))
+
+  (define (list->html l)
+    ;; '(foo bar) -> '(ul (li foo) (li bar))
+    `(ul . ,(map (lambda (i) `(li ,i)) ((->list atom->string) l))))
+
+  (define (alist->html l)
+    ;; '((k1 . v1) (k2 . v2)) -> '(dl (dt k1) (dd v1) (dt k2) (dd v2))
+    (define (flat-map-1 proc l) (apply append (map proc l)))
+    `(dl . ,(flat-map-1 (lambda (kv) (list `(dt ,(car kv)) `(dd ,(cdr kv)))) ((->alist atom->string) l))))
+
+  (define (alists->html ll)
+    ;; '(((c1 . h1) (c2 . h2)) ((c1 . r11) (c2 . r12)) ((c1 . r21) (c2 . r22)))
+    ;;   -> '(table (tr (th h1) (th h2)) (tr (td r11) (td r12)) (tr (td r21) (td r22)))
+    (define ll-strs ((->alists atom->string) ll))
+    (define headers (map (lambda (h) `(th ,(cdr h))) (car ll-strs)))
+    (define rows (map (lambda (l) `(tr . ,(map (lambda (kv) `(td ,(cdr kv))) l))) (cdr ll-strs)))
+    `(table . ,(cons `(tr . ,headers) rows)))
+
+  ;; --- (very limited) JSON builders
+
+  (define (%join-items items)
+    (string-append "[" (string-join items ",") "]"))
+
+  (define (%join-object obj)
+    (string-join (map (lambda (kv) (string-append (car kv) ":" (cdr kv))) obj) ","))
+
+  (define (list->json l)
+    ;; '(foo bar) -> ["foo","bar"]
+    (%join-items ((->list atom->qstring) l)))
+
+  (define (alist->json l)
+    ;; '((k1 . v1) (k2 . v2)) -> {"k1":"v1","k2":"v2"}
+    (string-append "{" (%join-object ((->alist atom->qstring) l)) "}"))
+
+  (define (alists->json ll)
+    ;; '(((c1 . h1) (c2 . h2)) ((c1 . r11) (c2 . r12)) ((c1 . r21) (c2 . r22)))
+    ;;   -> "["c1":"HC1","c2":"HC2","c1":"R1C1","c2":"R1C2","c1":"R2C1","c2":"R2C2"]"
+    (%join-items (map %join-object ((->alists atom->qstring) ll))))
+
+  ;; ---
 
   (define (make-result-formatter request result-type)
     (let* (;; for now we simply pick the first accepted document format, no negotiation:
            (df (car (request-accept-documentation-format request)))
-           (text-proc (cond
-                       ;; TODO: selecting markdown or plaintext is not orthogonal to the accept-type as markdown won't
-                       ;;   make much sense for e.g. HTML, so check this when already creating the request or here?
-                       ;; TODO: implement markdown formatting, then use `text-proc'.
-                       ((string=? df "plaintext") identity)
-                       ((string=? df "markdown")  identity)
-                       (else (error "Bad documentation format" df))))
            (at (request-accept-type request)))
       (cond
-       ((string=? at "application/sexp")
+       ((and (string=? at "text/plain") (string=? df "plaintext"))
         (case result-type
-          ((atom)   atom->sexp-string)
-          ((list)   (->list atom->sexp-string))
-          ((alist)  (->alist atom->sexp-string))
-          ((alists) (->alists atom->sexp-string))
+          ((atom)   atom->string)
+          ((list)   (->list atom->string))
+          ((alist)  alist->plain)
+          ((alists) alists->plain)
           (else (error "Bad result type" result-type))))
-       ((string=? at "application/json")
-        (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+       ((and (string=? at "text/plain") (string=? df "markdown"))
+        (case result-type               ; TODO: implement formatting for markdown
+          ((atom)   atom->string)
+          ((list)   (->list atom->string))
+          ((alist)  alist->plain)
+          ((alists) alists->plain)
           (else (error "Bad result type" result-type))))
        ((string=? at "text/html")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+          ((atom)   atom->html)
+          ((list)   list->html)
+          ((alist)  alist->html)
+          ((alists) alists->html)
           (else (error "Bad result type" result-type))))
-       ((string=? at "text/plain")
+       ((string=? at "application/sexp")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+          ((atom)   atom->qstring)
+          ((list)   (->list atom->qstring))
+          ((alist)  (->alist atom->qstring))
+          ((alists) (->alists atom->qstring))
+          (else (error "Bad result type" result-type))))
+       ((string=? at "application/json")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
+        (case result-type
+          ((atom)   atom->qstring)      ; JSON now allows single string as value (RFC4627, RFC7159)
+          ((list)   list->json)
+          ((alist)  alist->json)
+          ((alists) alists->json)
           (else (error "Bad result type" result-type))))
        (else (error "Bad accept type" at)))))
 
-  (lambda (request key)
-    ;; 1st level of dispatch: find handler procedure for given `key':
-    (let loop ((handler-search-list handler-list))
+  (define ext-handler-list (append handler-list
+                                   ;; append generic handlers - if also user-provided, the generic handler is not used:
+                                   `((error-handler alist ,identity))))
+
+  (lambda (request api-key)
+    ;; 1st level of dispatch: find handler procedure for given `api-key':
+    (let loop ((handler-search-list ext-handler-list))
       (cond
        ((null? handler-search-list)
-        (error "Cannot find handler" key (map car handler-list)))
-       ((eq? (car (car handler-search-list)) key)
+        (error "Cannot find handler" api-key (map car ext-handler-list)))
+       ((eq? (car (car handler-search-list)) api-key)
         (let* ((handler (assert-pred list? (car handler-search-list)))
                (result-type (assert-pred symbol? (cadr handler)))
                (handler-proc (assert-pred procedure? (caddr handler)))
                ;; 2nd level of dispatch: make formatting procedure for request's accept parameters and `result-type':
                (result-formatter (assert-pred procedure? (make-result-formatter request result-type))))
+          ;; Return the handler procedure, supporting various argument list formats, which will either return the
+          ;; formatted result, if found or #f:
           (lambda args
-            ;; return a handler procedure, supporting various argument list formats, which will also format the result:
-            (let* ((result (apply handler-proc args))
-                   (formatted (assert-pred string? (result-formatter result))))
-              formatted))))
+            (let ((result (apply handler-proc args)))
+              (and result (result-formatter result))))))
        (else
         (loop (cdr handler-search-list)))))))
+#+end_src
 
-(define *request-method-unknown*  1000)
-(define *no-text-at-point*        1001)
-
+#+begin_src my-scheme
 (define (request->response client-info dispatch-handler request)
   (assert-pred <client-info?> client-info)
   (assert-pred procedure? dispatch-handler)
   (assert-pred <request?> request)
   (assert-pred <response?>
-               (let ((method (request-method request)))
+               (let ((error-handler (dispatch-handler request 'error-handler))
+                     (method (request-method request)))
+
+                 (define (dispatch-nullary api-key http-ok-code http-error-code)
+                   (let ((result ((dispatch-handler request api-key) client-info)))
+                     (if result
+                         (%make-response request http-ok-code result)
+                         (%make-error-response request http-error-code
+                                               (error-handler `((error   . no-result)
+                                                                (api-key . ,api-key)))))))
+
+                 (define (dispatch-unary api-key http-ok-code http-error-code arg-1 arg-missing-tag)
+                   (if arg-1
+                       (let ((result ((dispatch-handler request api-key) client-info arg-1)))
+                         (if result
+                             (%make-response request http-ok-code result)
+                             (%make-error-response request http-error-code
+                                                   (error-handler `((error   . no-result)
+                                                                    (api-key . ,api-key)
+                                                                    (arg-1   . ,arg-1))))))
+                       (%make-error-response request http-error-code
+                                             (error-handler `((error   . ,arg-missing-tag)
+                                                              (api-key . ,api-key))))))
                  (cond
                   ((string=? method "documentation-index-url")
-                   (%make-response request ((dispatch-handler request 'documentation-index-url) client-info)))
+                   (dispatch-nullary 'documentation-index-url 200 500))
                   ((string=? method "documentation-query-url")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'documentation-query-url) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'documentation-query-url 200 500 (request-text-at-point request) 'no-text-at-point))
                   ((string=? method "built-in-describe-object")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'built-in-describe-object) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'built-in-describe-object 200 500 (request-text-at-point request) 'no-text-at-point))
                   ((string=? method "built-in-apropos-fragment")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'built-in-apropos-fragment) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'built-in-apropos-fragment 200 500 (request-text-at-point request) 'no-text-at-point))
                   (else
-                   (%make-error-response request *request-method-unknown* (string-append "Request method unknown: " method)))))))
+                   (%make-error-response request 500
+                                         (error-handler `((error   . api-method-unknown)
+                                                          (method  . ,method)))))))))
 #+end_src
 
 ***** Gauche-specific code
@@ -509,10 +635,10 @@ General data model, usually implemented using record types as defined by [[https
 :header-args:my-scheme-gauche: :tangle src/gauche/sdp/common/model-gauche.scm
 :END:
 
-To just test the bindings imported and exported from that module, run the following:
+*Note:* To just test some bindings imported and exported from the module below, run the following:
 
 #+begin_src shell
-gosh -A"./gauche" -A"./common/sdp/common" -e"(use sdp.common.model-gauche)" -e"(list make-client-info-gauche make-request)" -e"(exit)"
+gosh -A"./gauche" -A"./common/sdp/common" -e"(use sdp.common.model-gauche)" -e"(display (list make-client-info-gauche make-request))" -e"(exit)"
 #+end_src
 
 #+begin_src my-scheme-gauche
@@ -525,9 +651,16 @@ gosh -A"./gauche" -A"./common/sdp/common" -e"(use sdp.common.model-gauche)" -e"(
   (use util.match)
   (use gauche.parameter)
   (use srfi-9)
-  (export <client-info?> make-generic-client-info make-unknown-client-info client-info-implementation-name)
-  (export make-request request->response make-dispatch-handler)
-  (export make-client-info-gauche))
+
+  (export  <client-info?> client-info-implementation-name client-info-implementation-version
+           client-info-implementation-mode client-info-module-name)
+  (export  <request?> request-id request-method request-text-document request-text-at-point request-params
+           request-content-type request-content-encoding
+           request-accept-type request-accept-encoding request-accept-documentation-format)
+  (export <response?> response-http-code response-result response-error-message
+          response-content-type response-content-encoding response-content-documentation-format)
+  (export make-client-info-gauche make-generic-client-info make-unknown-client-info)
+  (export make-request request->response make-dispatch-handler))
 (select-module sdp.common.model-gauche)
 
 (include "prelude.scm")
@@ -547,10 +680,13 @@ gosh -A"./gauche" -A"./common/sdp/common" -e"(use sdp.common.model-gauche)" -e"(
 :header-args:my-scheme-guile: :tangle src/guile/sdp/common/model-guile.scm
 :END:
 
-To just test the bindings imported and exported from that module, run the following:
+*Note:* Guile has a non-standard extension which allows to customize the default printing behavior of records, see [[https://www.gnu.org/software/guile/manual/html_node/SRFI_002d9-Records.html][here]],
+chapter "Custom Printers".
+
+*Note:* To just test some bindings imported and exported from the module below, run the following:
 
 #+begin_src shell
-guile  -L "./guile" -L "./common" -c "(use-modules (sdp common model-guile)) (list make-client-info-guile make-request)"
+guile  -L "./guile" -L "./common" -c "(use-modules (sdp common model-guile)) (display (list make-client-info-guile make-request))"
 #+end_src
 
 #+begin_src my-scheme-guile
@@ -562,9 +698,15 @@ guile  -L "./guile" -L "./common" -c "(use-modules (sdp common model-guile)) (li
 (define-module (sdp common model-guile)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-9)
-  #:export (<client-info?> make-generic-client-info make-unknown-client-info client-info-implementation-name)
-  #:export (make-request request->response make-dispatch-handler)
-  #:export (make-client-info-guile))
+  #:export (<client-info?> client-info-implementation-name client-info-implementation-version
+                           client-info-implementation-mode client-info-module-name)
+  #:export (<request?> request-id request-method request-text-document request-text-at-point request-params
+                       request-content-type request-content-encoding
+                       request-accept-type request-accept-encoding request-accept-documentation-format)
+  #:export (<response?> response-http-code response-result response-error-message
+                        response-content-type response-content-encoding response-content-documentation-format)
+  #:export (make-client-info-guile make-generic-client-info make-unknown-client-info)
+  #:export (make-request request->response make-dispatch-handler))
 
 (include-from-path "sdp/common/prelude.scm")
 (include-from-path "sdp/common/logging.scm")
@@ -809,7 +951,7 @@ Relevant documentation links:
                                              (lambda (opt name arg debug host port repl)
                                                (values debug host port (or arg (+schemedoc-repl+))))))))
                       (lambda (opt name arg . seeds)
-                        (format (current-error-port) "Unrecognized option `~A'" name))
+                        (simple-format (current-error-port) "Unrecognized option `~A'" name))
                       (lambda (op debug host port repl)
                         (values debug host port repl))
                       (+%%debug-level+)
@@ -952,8 +1094,8 @@ Relevant documentation links:
   (let* ((ci-gauche (make-client-info-gauche))
          (md-gauche (get-metadata ci-gauche))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-gauche 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-gauche 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-gauche 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-gauche 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-gauche dispatch-handler
@@ -968,8 +1110,8 @@ Relevant documentation links:
   (let* ((ci-unknown (make-unknown-client-info))
          (md-unknown (get-metadata ci-unknown))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-unknown 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-unknown 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-unknown 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-unknown 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-unknown dispatch-handler
@@ -1038,8 +1180,8 @@ Relevant documentation links:
   (let* ((ci-guile (make-client-info-guile))
          (md-guile (get-metadata ci-guile))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-guile 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-guile 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-guile 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-guile 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-guile dispatch-handler
@@ -1054,8 +1196,8 @@ Relevant documentation links:
   (let* ((ci-unknown (make-unknown-client-info))
          (md-unknown (get-metadata ci-unknown))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-unknown 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-unknown 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-unknown 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-unknown 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-unknown dispatch-handler
@@ -1114,7 +1256,9 @@ https://dthompson.us/rendering-html-with-sxml-and-gnu-guile.html.
 
 (define-module (sdp server html)
   #:use-module (sxml simple)
-  #:use-module (srfi srfi-26)
+  #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module (srfi srfi-26)           ; cut, cute
+  #:use-module ((srfi srfi-64) #:prefix test:)
   #:use-module (ice-9 match)
   #:use-module (ice-9 format)
   #:use-module (ice-9 hash-table)
@@ -1475,6 +1619,8 @@ Relevant documentation links for the Guile HTTP server:
 
 - http://git.savannah.gnu.org/cgit/guile.git/tree/module/web/server.scm?h=lightening
 
+We start with the module header and some general-purpose helpers, mostly around rendering some standard responses.
+
 #+begin_src my-scheme-guile
 (define-module (sdp server http)
   #:use-module (ice-9 binary-ports)     ; get-bytevector-all
@@ -1484,31 +1630,63 @@ Relevant documentation links for the Guile HTTP server:
   #:use-module (web response)
   #:use-module (web uri)
   #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module (srfi srfi-26)           ; cut, cute
   #:use-module ((srfi srfi-64) #:prefix test:)
-  #:use-module (sdp common model-guile)
+  #:use-module ((sdp common model-guile) #:prefix model:)
   #:use-module (sdp common repl-guile)
   #:use-module (sdp common metadata-guile)
   #:use-module (sdp server html)
-  #:export (http-server)
-  #:export (test))
+  #:export (http-server test-http-server)
+  #:export (test-render test-response))
 
-(define (request-path-components request)
-  (split-and-decode-uri-path (uri-path (request-uri request))))
+(include-from-path "sdp/common/prelude.scm")
+(include-from-path "sdp/common/logging.scm")
+
+(define* (request-header-ref request header #:optional dflt)
+  (or (assoc-ref (request-headers request) header) dflt))
 
 (define (request-query-components request)
-  ;; -> (alist-of (cons name value))
+  ;; -> (alist-of (cons name value)), where name is a symbol and value is a key
   (let ((query (uri-query (request-uri request))))
     (if query
         (map (lambda (query-component)
                (let ((name+value (string-split query-component #\=)))
-                 (cons (string->symbol (car name+value)) (car (cdr name+value)))))
+                 (if (null? (cdr name+value))
+                     (cons (string->symbol (car name+value)) #t)                    ; ?foo
+                     (cons (string->symbol (car name+value)) (cadr name+value)))))  ; ?foo=bar
              (filter
-              (lambda (query-component) (not (string-null? query-component)))
+              (negate string-null?)
               (map uri-decode (string-split query #\&))))
         '())))
 
-(define (request-header-ref request header)
-  (assoc-ref (request-headers request) header))
+(define* (request-query-component request component #:optional dflt)
+  (or (assoc-ref (request-query-components request) component) dflt))
+
+(define (request-path-components request)
+  (split-and-decode-uri-path (uri-path (request-uri request))))
+
+(define (css-link name)
+  `(link (@ (rel "stylesheet")
+            (href ,(string-append "/css/" name ".css")))))
+
+(define (href content uri)
+  `(a (@ (href ,uri)) ,content))
+
+(define (render-plain title line/lines)
+  (define lines (if (list? line/lines) line/lines (list line/lines)))
+  (define titled-lines (cons (simple-format #f "~a: ~a" title (car lines)) (cdr lines)))
+  (values '((content-type . (text/plain))) ; defaults to  #:code 200
+          (lambda (port) (write (string-join titled-lines "\n") port))))
+
+(define (render-sexp title sexp)
+  (define title-sym (if (symbol? title) title (string->symbol title)))
+  (values '((content-type . (application/sexp))) ; defaults to  #:code 200
+          (lambda (port) (write (cons title-sym sexp) port))))
+
+(define (render-json _ json-str/strs)
+  (define json-strs (if (list? json-str/strs) json-str/strs (list json-str/strs)))
+  (values '((content-type . (application/json))) ; defaults to  #:code 200
+          (lambda (port) (write (string-join json-strs "\n") port))))
 
 (define (render-html sxml)
   (values '((content-type . (text/html))) ; defaults to  #:code 200
@@ -1525,7 +1703,7 @@ Relevant documentation links for the Guile HTTP server:
        (body
         (div (@ (id "body"))
              (div (h1 ,title))
-             ,@body                       ; TODO: ,body or ,@
+             ,body
              (div (span "Powered by GNU Guile")))))))
 
   (render-html (template title body)))
@@ -1564,72 +1742,225 @@ Relevant documentation links for the Guile HTTP server:
   (values (build-response #:code 500) "Internal Server Error"))
 #+end_src
 
+Now we're initializing the request dispatch handler, using the central `make-dispatch-handler' procedure and passing
+both some handlers for test calls as well as the few already handlers featuring fetching of Scheme documentation.
+
 #+begin_src my-scheme-guile
-(include-from-path "sdp/common/prelude.scm")
-(include-from-path "sdp/common/logging.scm")
-
 (define dispatch-handler
-  (let ((md (get-metadata (make-client-info-guile))))
-    (make-dispatch-handler
-     `((documentation-index-url   atom  ,(assoc-ref md 'scheme-index-url))
-       (documentation-query-url   atom  ,(assoc-ref md 'scheme-query-url))
-       (built-in-describe-object  atom  ,built-in-describe-object)
-       (built-in-apropos-fragment atom  ,built-in-apropos-fragment)))))
-
-(define (test)
-  (test:test-begin "test-http-server-guile")
-  (let ((client-info (make-client-info-guile)))
-    (display (request->response client-info dispatch-handler (make-request "documentation-index-url")))
-    (display (request->response client-info dispatch-handler (make-request "documentation-query-url" #:text-at-point "format"))))
-  (test:test-end "test-http-server-guile"))
+  (let ((md (get-metadata (model:make-client-info-guile))))
+    (model:make-dispatch-handler
+     `(;; testing
+       (test-render-atom          atom   ,identity)
+       (test-render-list          list   ,identity)
+       (test-render-alist         alist  ,identity)
+       (test-render-alists        alists ,identity)
+       ;; metadata-based helpers
+       (documentation-index-url   atom   ,(assoc-ref md 'scheme-index-url))
+       (documentation-query-url   atom   ,(assoc-ref md 'scheme-query-url))
+       ;; REPL helpers
+       (built-in-describe-object  atom   ,built-in-describe-object)
+       (built-in-apropos-fragment atom   ,built-in-apropos-fragment)))))
 #+end_src
 
-#+begin_src my-scheme-guile
-(define (api-handler request body)
-  ;; https://www.gnu.org/software/guile/manual/html_node/Requests.html#Requests
-  (let ((uri      (request-uri request))
-        (method   (request-method request))
-        (path-cs  (request-path-components request))
-        (query-cs (request-query-components request))
-        (ctype    (request-content-type request))
-        ;; (body    (if body (utf8->string body) #f))
-        ;; (body-string (utf8->string body))
-        ;; (member 'application/x-www-form-urlencoded ctype)
-        (upath   (uri-path (request-uri request)))
-        (query   (uri-query (request-uri request))))
+The test procedure below - respective make target =test-render= - renders the responses to our various
+documentation-fetching handlers, requesting different output formats. Note that it doesn't currently mostly not execute
+tests asserting expected results but it simply displays the rendered output, assuming that that output format is anyway
+due to change. So the code here is rather presenting how to use the API.
 
-    ;; http://localhost:8080/
-    ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/" query: #f fragment: #f>
-    ;;      ...  GET/#f#f
-    ;; http://localhost:8080/foo/bar?dumm=doedel&dooh=ouch
-    ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/foo/bar" query: "dumm=doedel&dooh=ouch" fragment: #f>
-    ;;      ...  GETfoobar/foo/bar#fdumm=doedel&dooh=ouch
-    ;;           method         GET
-    ;;           path-cs        foobar
-    ;;           upath          /foo/bar
-    ;;           ctype          #f
-    ;;           query          dumm=doedel&dooh=ouch
-    ;;           query-cs       (dumm . doedel)(dooh . ouch)
-    (match (cons method path-cs)
-      (('GET . '())                     ; http://localhost:8080/
-       (render-simple-html "Index-Request"
-                           (list uri method path-cs upath ctype query query-cs)))
-      (('GET . ("api" "index" impl))   ; http://localhost:8080/api/index/guile
-       (render-simple-html "api-index-Request"
-                           (list uri method path-cs upath ctype query query-cs impl)))
-      (('GET . ("api" "query" impl symbol)) ; http://localhost:8080/api/query/guile/define
-       ;; TODO: add version -> query param or path part?
-       ;; TODO: add "mode", e.g. native, R7rs, ... -> query param or path part?
-       (render-simple-html "api-query-Request"
-                           (list uri method path-cs upath ctype query query-cs impl symbol)))
-      (('GET . ("foo" "bar"))          ; http://localhost:8080/foo/bar, http://localhost:8080/foo/bar?foo=f1&bar=b1...
-       (render-simple-html "Path-Request"
-                           (list uri method path-cs upath ctype query query-cs)))
-      (_ (not-found request)))))
+#+begin_src my-scheme-guile
+(define (test-render)
+
+  (define (%sxml->html-file sxml file-path)
+    (call-with-output-file file-path
+      (lambda (port)
+        (sxml->html sxml port))))
+
+  (define (%sxml->html-string sxml)
+    (call-with-output-string
+      (lambda (port)
+        (sxml->html sxml port))))
+
+  (define (%rendered->string rendering-thunk)
+    (define-values (_ port-writer) (rendering-thunk))
+    (call-with-output-string port-writer))
+
+  (test:test-begin "test-render-guile")
+  (test:test-assert (%sxml->html-string '(ul (li foo) (li bar)))
+                    "<ul><li>foo</li><li>bar</li></ul>")
+  (test:test-assert (%sxml->html-string '(dl (dt k1) (dd v1) (dt k2) (dd v2)))
+                    "<dl><dt>k1</dt><dd>v1</dd><dt>k2</dt><dd>v2</dd></dl>")
+
+  (let ((plain-request (model:make-request "test-render-html" #:accept-type "text/plain"))
+        (html-request  (model:make-request "test-render-html" #:accept-type "text/html"))
+        (sexp-request  (model:make-request "test-render-sexp" #:accept-type "application/sexp"))
+        (json-request  (model:make-request "test-render-json" #:accept-type "application/json"))
+        (atom-arg      "some-string-arg")
+        (list-arg      '(some-symbol-arg-1 "some-string-arg-2" 3.14159))
+        (alist-arg     '((k1 . v1) (k2 . v2)))
+        (alists-arg    '(((c1 . HC1) (c2 . HC2)) ((c1 . R1C1) (c2 . R1C2)) ((c1 . R2C1) (c2 . R2C2)))))
+
+    (define (%render-test render-proc request api-key arg)
+      (%rendered->string (lambda () (render-proc ((dispatch-handler request api-key) arg)))))
+
+    (define (%exec-test render-proc request api-key arg)
+      (displayln (list api-key (%render-test render-proc request api-key arg)))
+      (newline) (newline))
+
+    (%exec-test (cut render-plain       "plain:test-render-atom"   <>) plain-request 'test-render-atom   atom-arg)
+    (%exec-test (cut render-plain       "plain:test-render-list"   <>) plain-request 'test-render-list   list-arg)
+    (%exec-test (cut render-plain       "plain:test-render-alist"  <>) plain-request 'test-render-alist  alist-arg)
+    (%exec-test (cut render-plain       "plain:test-render-alists" <>) plain-request 'test-render-alists alists-arg)
+
+    (%exec-test (cut render-simple-html "html:test-render-atom"    <>) html-request  'test-render-atom   atom-arg)
+    (%exec-test (cut render-simple-html "html:test-render-list"    <>) html-request  'test-render-list   list-arg)
+    (%exec-test (cut render-simple-html "html:test-render-alist"   <>) html-request  'test-render-alist  alist-arg)
+    (%exec-test (cut render-simple-html "html:test-render-alists"  <>) html-request  'test-render-alists alists-arg)
+
+    (%exec-test (cut render-sexp        "sexp:test-render-atom"    <>) sexp-request  'test-render-atom   atom-arg)
+    (%exec-test (cut render-sexp        "sexp:test-render-list"    <>) sexp-request  'test-render-list   list-arg)
+    (%exec-test (cut render-sexp        "sexp:test-render-alist"   <>) sexp-request  'test-render-alist  alist-arg)
+    (%exec-test (cut render-sexp        "sexp:test-render-alists"  <>) sexp-request  'test-render-alists alists-arg)
+
+    (%exec-test (cut render-json        "json:test-render-atom"    <>) json-request  'test-render-atom   atom-arg)
+    (%exec-test (cut render-json        "json:test-render-list"    <>) json-request  'test-render-list   list-arg)
+    (%exec-test (cut render-json        "json:test-render-alist"   <>) json-request  'test-render-alist  alist-arg)
+    (%exec-test (cut render-json        "json:test-render-alists"  <>) json-request  'test-render-alists alists-arg)
+    )
+  (test:test-end "test-render-guile"))
+#+end_src
+
+The test procedure below - respective make target =test-response= - builds the complete response for the given request
+for each of our Scheme documentation APIs, using the default response renderer. The test procedure also tests correct
+error handling for some typical error constellations. Again the test rather displays the rendered output; it will be
+changed to assert expected output once the output format has been stabilized.
+
+#+begin_src my-scheme-guile
+(define (test-response)
+  (test:test-begin "test-response-guile")
+  (let ((client-info (model:make-client-info-guile)))
+    (display (model:request->response client-info dispatch-handler (model:make-request "documentation-index-url")))
+    (display (model:request->response client-info dispatch-handler (model:make-request "documentation-query-url"
+                                                                                       #:text-at-point "format")))
+    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-describe-object"
+                                                                                       #:text-at-point "or-map")))
+    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-apropos-fragment"
+                                                                                       #:text-at-point "bind")))
+    ;; api method not found:
+    (display (model:request->response client-info dispatch-handler (model:make-request "---totally-unknown")))
+    ;; no result found:
+    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-apropos-fragment"
+                                                                                       #:text-at-point "---totally-unknown"))))
+  (test:test-end "test-response-guile"))
+#+end_src
+
+Eventually we define our HTTP router, plus some more helpers. The makefile targets for the un-instrumented HTTP server
+and for the debug-server are =run-http-server= and =run-test-http-server=, respectively.
+
+#+begin_src my-scheme-guile
+(define (render-response sdp-response)
+  (assert-pred model:<response?> sdp-response)
+  (if (model:response-error-message sdp-response)
+      (values (build-response #:code (model:response-http-code sdp-response)
+                              #:headers `((content-type . (,(string->symbol (model:response-content-type sdp-response))))))
+              (lambda (port) (write (model:response-error-message sdp-response) port)))
+      (values (build-response #:code (model:response-http-code sdp-response)
+                              #:headers `((content-type . (,(string->symbol (model:response-content-type sdp-response))))))
+              (lambda (port) (write (or (model:response-result sdp-response) "") port)))))
+
+(define (guile-request->response request method impl text-at-point test-mode?)
+  (let* ((client-version   (request-query-component request 'version))
+         (client-mode      (request-query-component request 'mode))
+         (client-info      (case impl
+                             ((guile)
+                              (model:make-client-info-guile #:implementation-version client-version
+                                                            #:implementation-mode client-mode))
+                             ((gauche)
+                              (model:make-generic-client-info))
+                             (else
+                              (model:make-unknown-client-info))))
+         (request-ctype    (request-content-type request '(text/html)))
+         (request-charset  (or (assq-ref (cdr request-ctype) 'charset) "utf-8"))
+         (request-atypes   (request-accept request '((text/html))))
+         (query-format     (request-query-component request 'format "html"))
+         (accept-type      (cond
+                            ((string=? query-format "sexp")  "application/sexp")
+                            ((string=? query-format "json")  "application/json")
+                            ((string=? query-format "html")  "text/html")
+                            ((string=? query-format "plain") "text/plain")
+                            (else (symbol->string (car (car request-atypes)))))))
+    (if (request-query-component request 'debug)
+        (if test-mode?
+            (render-simple-html (simple-format #f "API-method ~s" method)
+                                (simple-format #f "content-type: ~s; accept-types: ~s; accept-mime: ~s~%\
+implementation: ~s; client-info: ~s; text-at-point: ~s"
+                                        request-ctype request-atypes accept-type
+                                        impl client-info text-at-point))
+            (not-found request))
+        (render-response (model:request->response client-info dispatch-handler
+                                                  (model:make-request method
+                                                                      #:text-at-point text-at-point
+                                                                      #:accept-type accept-type))))))
+
+(define* (make-api-handler #:optional (test-mode? #f))
+  (lambda (request body)
+    ;; https://www.gnu.org/software/guile/manual/html_node/Requests.html#Requests
+    (let ((uri      (request-uri request))
+          (method   (request-method request))
+          (path-cs  (request-path-components request))
+          (query-cs (request-query-components request))
+          (atypes   (list 'acc:  (map (lambda (i) (format #f "|~s|" i)) (request-accept request))
+                          'acs:  (request-accept-charset request)    ; Accept-Charset
+                          'aenc: (request-accept-encoding request)   ; Accept-Encoding
+                          'acl:  (request-accept-language request))) ; Accept-Language
+          (ctype    (request-content-type request))
+          ;; (body    (if body (utf8->string body) #f))
+          ;; (body-string (utf8->string body))
+          ;; (member 'application/x-www-form-urlencoded ctype)
+          (upath   (uri-path (request-uri request)))
+          (query   (uri-query (request-uri request))))
+
+      ;; http://localhost:8080/
+      ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/" query: #f fragment: #f>
+      ;;      ...  GET/#f#f
+      ;; http://localhost:8080/foo/bar?dumm=doedel&dooh=ouch
+      ;;   #<<uri> scheme: #f userinfo: #f host: #f port: #f path: "/foo/bar" query: "dumm=doedel&dooh=ouch" fragment: #f>
+      ;;           method         GET
+      ;;           path-cs        foobar
+      ;;           upath          /foo/bar
+      ;;           atypes         |(text/html)||(application/xhtml+xml)||(application/xml (q . 900))||(image/webp)||(image/apng)||(*/* (q . 800))|
+      ;;                          acs:aenc:(1000 . gzip)(1000 . deflate)(1000 . br)acl:(1000 . en-US)(900 . en)
+      ;;           ctype          #f
+      ;;           query          dumm=doedel&dooh=ouch
+      ;;           query-cs       (dumm . doedel)(dooh . ouch)
+      (match (cons method path-cs)
+             (('GET . '())                     ; http://localhost:8080/
+              (render-simple-html "Index-Request"
+                                  (list uri method path-cs upath atypes ctype query query-cs)))
+             (('GET . ("api" "index" impl))
+              ;; http://localhost:8080/api/index/guile
+              ;; http://localhost:8080/api/index/guile?debug
+              ;; http://localhost:8080/api/index/guile?format=sexp
+              (guile-request->response request "documentation-index-url" impl #f test-mode?))
+             (('GET . ("api" "query" impl text-at-point))
+              ;; http://localhost:8080/api/query/guile/define
+              ;; http://localhost:8080/api/query/guile/define?debug
+              ;; http://localhost:8080/api/query/guile/define?format=sexp
+              (guile-request->response request "documentation-query-url" impl text-at-point test-mode?))
+             (('GET . ("internal" "kill"))     ; http://localhost:8080/internal/kill
+              (if test-mode?
+                  (begin
+                    (info "Test server shutdown: " (+schemedoc-host-address+) (+schemedoc-port+))
+                    (kill (getpid) SIGINT))
+                  (not-found request)))
+             (_ (not-found request))))))
 
 (define (http-server)
   (info "Server start: " (+schemedoc-host-address+) (+schemedoc-port+))
-  (run-server api-handler))
+  (run-server (make-api-handler)))
+
+(define (test-http-server)
+  (info "Test server start: " (+schemedoc-host-address+) (+schemedoc-port+))
+  (run-server (make-api-handler #t)))
 #+end_src
 
 *** API middleware and API client

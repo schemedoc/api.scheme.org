@@ -46,7 +46,7 @@
 
   (define (or/false pred)
     ;; (-> boolean? (-> any boolean?)); the returned predicate returns true iff the passed object matches the given
-    ;;   predicate or its value is #f.
+    ;;   predicate or if its value is #f.
     (lambda (obj) (if obj (pred obj) #t)))
 
   (set! *request-counter* (+ *request-counter* 1))
@@ -91,49 +91,51 @@
                     (assert-pred pair? #|non-empty|# accept-documentation-format))))
 
 (define-record-type <response>
-  (%%make-response id method text-document text-at-point result error-code error-message
+  (%%make-response id method text-document text-at-point http-code result error-message
                    content-type content-encoding content-documentation-format)
   <response?>
   (id                           response-id)
   (method                       response-method)
   (text-document                response-text-document)
   (text-at-point                response-text-at-point)
+  (http-code                    response-http-code)
   (result                       response-result)
-  (error-code                   response-error-code)
-  (error-message                reponse-error-message)
+  (error-message                response-error-message)
   (content-type                 response-content-type)
   (content-encoding             response-content-encoding)
   (content-documentation-format response-content-documentation-format))
 
-(define (%make-response request result)
+(define (%make-response request http-code result)
   (assert-pred <request?> request)
   (%%make-response (request-id                          request)
                    (request-method                      request)
                    (request-text-document               request)
                    (request-text-at-point               request)
-                   (assert-pred string?                 result)
-                   #f
-                   #f
-                   (request-accept-type                 request)
-                   (request-accept-encoding             request)
-                   (request-accept-documentation-format request)))
+                   (assert-pred number?                 http-code)
+                   ;; `result' is not necessarily a string, might also be an s-exp; it just cannot be #f:
+                   (assert-pred identity                result)
+                   #f                                   ; error-message
+                   (assert-pred string?                 (request-accept-type request))
+                   (assert-pred string?                 (request-accept-encoding request))
+                   (assert-pred pair?                   (request-accept-documentation-format request))))
 
-(define (%make-error-response request error-code error-message)
+(define (%make-error-response request http-error-code error-message)
   (assert-pred <request?> request)
   (%%make-response (request-id                          request)
                    (request-method                      request)
                    (request-text-document               request)
                    (request-text-at-point               request)
-                   #f
-                   (assert-pred number?                 error-code)
-                   (assert-pred string?                 error-message)
+                   (assert-pred number?                 http-error-code)
+                   #f                                   ; result
+                   ;; `error-message' is not necessarily a string, might also be an s-exp; it just cannot be #f:
+                   (assert-pred identity                error-message)
                    (request-accept-type                 request)
                    (request-accept-encoding             request)
                    (request-accept-documentation-format request)))
 (define (make-dispatch-handler handler-list)
 
-  (define (%atom->string obj for-sexp?)
-    (let ((quoter (if for-sexp?
+  (define (%atom->string obj quoted?)
+    (let ((quoter (if quoted?
                       (lambda (s) (string-append (string #\") s (string #\")))
                       identity)))
       (cond
@@ -142,115 +144,193 @@
        ((symbol? obj) (quoter (symbol->string obj)))
        (else (error "Unexpected atom" obj)))))
 
-  (define (other->string obj)           ; no quotes
-    (with-output-to-string (lambda () (display obj))))
-
-  (define (sexp->string obj)            ; with quotes
-    (with-output-to-string (lambda () (write obj))))
-
-  (define (atom->other-string obj)
+  (define (atom->string obj)
     (%atom->string obj #f))
 
-  (define (atom->sexp-string obj)
+  (define (atom->qstring obj)
     (%atom->string obj #t))
 
-  (define (->list ->string)             ; ((->list atom->other-string) '(1 2 3))
+  ;; (define (unquoted->string obj)        ; no quotes
+  ;;   (with-output-to-string (lambda () (display obj))))
+
+  ;; (define (quoted->string obj)          ; with quotes
+  ;;   (with-output-to-string (lambda () (write obj))))
+
+  (define (->list ->string)             ; ((->list atom->string) '(1 2 3))
     (lambda (l) (map ->string l)))
 
-  (define (->alist ->string)            ; ((->alist atom->other-string) '((a . 1) (b . 2) (b . 3)))
+  (define (->alist ->string)            ; ((->alist atom->string) '((a . 1) (b . 2) (b . 3)))
     (lambda (al) (map (lambda (p) (cons (->string (car p)) (->string (cdr p)))) al)))
 
-  (define (->alists ->string)           ; ((->alists atom->other-string) '(((a . 1) (b . 2) (b . 3))))
+  (define (->alists ->string)           ; ((->alists atom->string) '(((a . 1) (b . 2) (b . 3))))
     (lambda (als) (map (lambda (al) ((->alist ->string) al)) als)))
+
+  ;; --- plain text builders
+
+  (define (alist->plain l)
+    (map (lambda (kv) (string-append (car kv) ": " (cdr kv))) ((->alist atom->string) l)))
+
+  (define (alists->plain ll)
+    (define ll-strs ((->alists atom->string) ll))
+    ;; '(((c1 . HC1) (c2 . HC2)) ((c1 . R1C1) (c2 . R1C2)) ((c1 . R2C1) (c2 . R2C2)))
+    ;;   -> HC1 \t HC2 \n R1C1 \t R1C2 \n R2C1 \t R2C2
+    (define headers (map cdr (car ll-strs)))
+    (define rows (map (lambda (l) (map cdr l)) (cdr ll-strs)))
+    (define (format-line l) (string-join l "\t"))
+    (string-join (map format-line (cons headers rows)) "\n"))
+
+  ;; --- html builders
+
+  (define (atom->html a)
+    ;; "some-string-arg" -> '(div some-string-arg)
+    `(div ,(atom->string a)))
+
+  (define (list->html l)
+    ;; '(foo bar) -> '(ul (li foo) (li bar))
+    `(ul . ,(map (lambda (i) `(li ,i)) ((->list atom->string) l))))
+
+  (define (alist->html l)
+    ;; '((k1 . v1) (k2 . v2)) -> '(dl (dt k1) (dd v1) (dt k2) (dd v2))
+    (define (flat-map-1 proc l) (apply append (map proc l)))
+    `(dl . ,(flat-map-1 (lambda (kv) (list `(dt ,(car kv)) `(dd ,(cdr kv)))) ((->alist atom->string) l))))
+
+  (define (alists->html ll)
+    ;; '(((c1 . h1) (c2 . h2)) ((c1 . r11) (c2 . r12)) ((c1 . r21) (c2 . r22)))
+    ;;   -> '(table (tr (th h1) (th h2)) (tr (td r11) (td r12)) (tr (td r21) (td r22)))
+    (define ll-strs ((->alists atom->string) ll))
+    (define headers (map (lambda (h) `(th ,(cdr h))) (car ll-strs)))
+    (define rows (map (lambda (l) `(tr . ,(map (lambda (kv) `(td ,(cdr kv))) l))) (cdr ll-strs)))
+    `(table . ,(cons `(tr . ,headers) rows)))
+
+  ;; --- (very limited) JSON builders
+
+  (define (%join-items items)
+    (string-append "[" (string-join items ",") "]"))
+
+  (define (%join-object obj)
+    (string-join (map (lambda (kv) (string-append (car kv) ":" (cdr kv))) obj) ","))
+
+  (define (list->json l)
+    ;; '(foo bar) -> ["foo","bar"]
+    (%join-items ((->list atom->qstring) l)))
+
+  (define (alist->json l)
+    ;; '((k1 . v1) (k2 . v2)) -> {"k1":"v1","k2":"v2"}
+    (string-append "{" (%join-object ((->alist atom->qstring) l)) "}"))
+
+  (define (alists->json ll)
+    ;; '(((c1 . h1) (c2 . h2)) ((c1 . r11) (c2 . r12)) ((c1 . r21) (c2 . r22)))
+    ;;   -> "["c1":"HC1","c2":"HC2","c1":"R1C1","c2":"R1C2","c1":"R2C1","c2":"R2C2"]"
+    (%join-items (map %join-object ((->alists atom->qstring) ll))))
+
+  ;; ---
 
   (define (make-result-formatter request result-type)
     (let* (;; for now we simply pick the first accepted document format, no negotiation:
            (df (car (request-accept-documentation-format request)))
-           (text-proc (cond
-                       ;; TODO: selecting markdown or plaintext is not orthogonal to the accept-type as markdown won't
-                       ;;   make much sense for e.g. HTML, so check this when already creating the request or here?
-                       ;; TODO: implement markdown formatting, then use `text-proc'.
-                       ((string=? df "plaintext") identity)
-                       ((string=? df "markdown")  identity)
-                       (else (error "Bad documentation format" df))))
            (at (request-accept-type request)))
       (cond
-       ((string=? at "application/sexp")
+       ((and (string=? at "text/plain") (string=? df "plaintext"))
         (case result-type
-          ((atom)   atom->sexp-string)
-          ((list)   (->list atom->sexp-string))
-          ((alist)  (->alist atom->sexp-string))
-          ((alists) (->alists atom->sexp-string))
+          ((atom)   atom->string)
+          ((list)   (->list atom->string))
+          ((alist)  alist->plain)
+          ((alists) alists->plain)
           (else (error "Bad result type" result-type))))
-       ((string=? at "application/json")
-        (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+       ((and (string=? at "text/plain") (string=? df "markdown"))
+        (case result-type               ; TODO: implement formatting for markdown
+          ((atom)   atom->string)
+          ((list)   (->list atom->string))
+          ((alist)  alist->plain)
+          ((alists) alists->plain)
           (else (error "Bad result type" result-type))))
        ((string=? at "text/html")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+          ((atom)   atom->html)
+          ((list)   list->html)
+          ((alist)  alist->html)
+          ((alists) alists->html)
           (else (error "Bad result type" result-type))))
-       ((string=? at "text/plain")
+       ((string=? at "application/sexp")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
-          ((atom)   atom->other-string)
-          ((list)   (->list atom->other-string))
-          ((alist)  (->alist atom->other-string))
-          ((alists) (->alists atom->other-string))
+          ((atom)   atom->qstring)
+          ((list)   (->list atom->qstring))
+          ((alist)  (->alist atom->qstring))
+          ((alists) (->alists atom->qstring))
+          (else (error "Bad result type" result-type))))
+       ((string=? at "application/json")
+        (unless (string=? df "plaintext") (error "Bad documentation format" df))
+        (case result-type
+          ((atom)   atom->qstring)      ; JSON now allows single string as value (RFC4627, RFC7159)
+          ((list)   list->json)
+          ((alist)  alist->json)
+          ((alists) alists->json)
           (else (error "Bad result type" result-type))))
        (else (error "Bad accept type" at)))))
 
-  (lambda (request key)
-    ;; 1st level of dispatch: find handler procedure for given `key':
-    (let loop ((handler-search-list handler-list))
+  (define ext-handler-list (append handler-list
+                                   ;; append generic handlers - if also user-provided, the generic handler is not used:
+                                   `((error-handler alist ,identity))))
+
+  (lambda (request api-key)
+    ;; 1st level of dispatch: find handler procedure for given `api-key':
+    (let loop ((handler-search-list ext-handler-list))
       (cond
        ((null? handler-search-list)
-        (error "Cannot find handler" key (map car handler-list)))
-       ((eq? (car (car handler-search-list)) key)
+        (error "Cannot find handler" api-key (map car ext-handler-list)))
+       ((eq? (car (car handler-search-list)) api-key)
         (let* ((handler (assert-pred list? (car handler-search-list)))
                (result-type (assert-pred symbol? (cadr handler)))
                (handler-proc (assert-pred procedure? (caddr handler)))
                ;; 2nd level of dispatch: make formatting procedure for request's accept parameters and `result-type':
                (result-formatter (assert-pred procedure? (make-result-formatter request result-type))))
+          ;; Return the handler procedure, supporting various argument list formats, which will either return the
+          ;; formatted result, if found or #f:
           (lambda args
-            ;; return a handler procedure, supporting various argument list formats, which will also format the result:
-            (let* ((result (apply handler-proc args))
-                   (formatted (assert-pred string? (result-formatter result))))
-              formatted))))
+            (let ((result (apply handler-proc args)))
+              (and result (result-formatter result))))))
        (else
         (loop (cdr handler-search-list)))))))
-
-(define *request-method-unknown*  1000)
-(define *no-text-at-point*        1001)
-
 (define (request->response client-info dispatch-handler request)
   (assert-pred <client-info?> client-info)
   (assert-pred procedure? dispatch-handler)
   (assert-pred <request?> request)
   (assert-pred <response?>
-               (let ((method (request-method request)))
+               (let ((error-handler (dispatch-handler request 'error-handler))
+                     (method (request-method request)))
+
+                 (define (dispatch-nullary api-key http-ok-code http-error-code)
+                   (let ((result ((dispatch-handler request api-key) client-info)))
+                     (if result
+                         (%make-response request http-ok-code result)
+                         (%make-error-response request http-error-code
+                                               (error-handler `((error   . no-result)
+                                                                (api-key . ,api-key)))))))
+
+                 (define (dispatch-unary api-key http-ok-code http-error-code arg-1 arg-missing-tag)
+                   (if arg-1
+                       (let ((result ((dispatch-handler request api-key) client-info arg-1)))
+                         (if result
+                             (%make-response request http-ok-code result)
+                             (%make-error-response request http-error-code
+                                                   (error-handler `((error   . no-result)
+                                                                    (api-key . ,api-key)
+                                                                    (arg-1   . ,arg-1))))))
+                       (%make-error-response request http-error-code
+                                             (error-handler `((error   . ,arg-missing-tag)
+                                                              (api-key . ,api-key))))))
                  (cond
                   ((string=? method "documentation-index-url")
-                   (%make-response request ((dispatch-handler request 'documentation-index-url) client-info)))
+                   (dispatch-nullary 'documentation-index-url 200 500))
                   ((string=? method "documentation-query-url")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'documentation-query-url) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'documentation-query-url 200 500 (request-text-at-point request) 'no-text-at-point))
                   ((string=? method "built-in-describe-object")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'built-in-describe-object) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'built-in-describe-object 200 500 (request-text-at-point request) 'no-text-at-point))
                   ((string=? method "built-in-apropos-fragment")
-                   (let ((tap (request-text-at-point request)))
-                     (if tap
-                         (%make-response request ((dispatch-handler request 'built-in-apropos-fragment) client-info tap))
-                         (%make-error-response request *no-text-at-point* "No text at point"))))
+                   (dispatch-unary 'built-in-apropos-fragment 200 500 (request-text-at-point request) 'no-text-at-point))
                   (else
-                   (%make-error-response request *request-method-unknown* (string-append "Request method unknown: " method)))))))
+                   (%make-error-response request 500
+                                         (error-handler `((error   . api-method-unknown)
+                                                          (method  . ,method)))))))))

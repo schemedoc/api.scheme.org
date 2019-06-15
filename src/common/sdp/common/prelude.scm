@@ -28,3 +28,12 @@
 (define (displayln . args)
   (for-each display args)
   (newline))
+
+(cond-expand
+ (gauche
+  (define (negate proc)
+    ;; Return a procedure that will negate the result of given PROC.
+    (compose proc not)))
+ (else
+  ;; Guile does already have `negate' defined, others not yet supported.
+  #t))

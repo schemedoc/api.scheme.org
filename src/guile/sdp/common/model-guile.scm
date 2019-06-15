@@ -6,9 +6,15 @@
 (define-module (sdp common model-guile)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-9)
-  #:export (<client-info?> make-generic-client-info make-unknown-client-info client-info-implementation-name)
-  #:export (make-request request->response make-dispatch-handler)
-  #:export (make-client-info-guile))
+  #:export (<client-info?> client-info-implementation-name client-info-implementation-version
+                           client-info-implementation-mode client-info-module-name)
+  #:export (<request?> request-id request-method request-text-document request-text-at-point request-params
+                       request-content-type request-content-encoding
+                       request-accept-type request-accept-encoding request-accept-documentation-format)
+  #:export (<response?> response-http-code response-result response-error-message
+                        response-content-type response-content-encoding response-content-documentation-format)
+  #:export (make-client-info-guile make-generic-client-info make-unknown-client-info)
+  #:export (make-request request->response make-dispatch-handler))
 
 (include-from-path "sdp/common/prelude.scm")
 (include-from-path "sdp/common/logging.scm")

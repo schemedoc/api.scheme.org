@@ -44,8 +44,8 @@
   (let* ((ci-guile (make-client-info-guile))
          (md-guile (get-metadata ci-guile))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-guile 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-guile 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-guile 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-guile 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-guile dispatch-handler
@@ -60,8 +60,8 @@
   (let* ((ci-unknown (make-unknown-client-info))
          (md-unknown (get-metadata ci-unknown))
          (dispatch-handler (make-dispatch-handler
-                            `((documentation-index-url atom ,(assoc-ref md-unknown 'scheme-index-url))
-                              (documentation-query-url atom ,(assoc-ref md-unknown 'scheme-query-url))))))
+                            `((documentation-index-url atom  ,(assoc-ref md-unknown 'scheme-index-url))
+                              (documentation-query-url atom  ,(assoc-ref md-unknown 'scheme-query-url))))))
     (test:test-assert (string:string-contains
                        (response-result
                         (request->response ci-unknown dispatch-handler

@@ -95,7 +95,7 @@
                                              (lambda (opt name arg debug host port repl)
                                                (values debug host port (or arg (+schemedoc-repl+))))))))
                       (lambda (opt name arg . seeds)
-                        (format (current-error-port) "Unrecognized option `~A'" name))
+                        (simple-format (current-error-port) "Unrecognized option `~A'" name))
                       (lambda (op debug host port repl)
                         (values debug host port repl))
                       (+%%debug-level+)

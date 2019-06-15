@@ -16,7 +16,9 @@
 
 (define-module (sdp server html)
   #:use-module (sxml simple)
-  #:use-module (srfi srfi-26)
+  #:use-module ((srfi srfi-13) #:prefix string:)
+  #:use-module (srfi srfi-26)           ; cut, cute
+  #:use-module ((srfi srfi-64) #:prefix test:)
   #:use-module (ice-9 match)
   #:use-module (ice-9 format)
   #:use-module (ice-9 hash-table)

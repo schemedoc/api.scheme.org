@@ -2,7 +2,7 @@
 
 all :
 
-test : test-repl test-metadata test-http-server
+test : test-repl test-metadata test-render test-response
 
 FORCE :
 MD_PATH         ?= /home/frank/localsrc/implementation-metadata
@@ -12,6 +12,10 @@ DEBUG_ALL       ?= '--debug=\#t'
 
 run-http-server :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (http-server)"
+
+run-test-http-server :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-http-server)"
+	echo "TODO:next: no use run-client-guile to perform some tests on server, then shutdown server"
 .PHONY : run-client-guile
 
 run-client-guile :
@@ -39,8 +43,12 @@ test-metadata-gauche :
 test-metadata-guile :
 	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp common metadata-guile)) (test)" $(DEBUG_ALL)
 	tail -n2 test-metadata-guile.log
-.PHONY : test-http-server
+.PHONY : test-render test-response
 
-test-http-server :
-	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test)" $(DEBUG_ALL)
-	tail -n2 test-http-server-guile.log
+test-render :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-render)" $(DEBUG_ALL)
+	tail -n2 test-render-guile.log
+
+test-response :
+	MD_PATH=$(MD_PATH) guile  -L "$(CURDIR)/guile" -L "$(CURDIR)/common" -c "(use-modules (sdp server http)) (test-response)" $(DEBUG_ALL)
+	tail -n2 test-response-guile.log
