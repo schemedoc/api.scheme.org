@@ -4,7 +4,7 @@ This repository holds a first shot of a documentation infrastructure for various
 
 The complete functionality is split into various layers:
 
-1. An API server, which provides an HTTP API for various ways to request documentation relevant information
+1. An central API server, which provides an HTTP API for various ways to request documentation relevant information.
 
 2. An API middleware, which can optionally be used on the developers systems to access the API server. It defines an API
    client, which performs the communication with the API server, but it can also define additional features such as
@@ -12,6 +12,37 @@ The complete functionality is split into various layers:
    `describe {identifier}` command of various Scheme REPLs.
 
 3. An editor client, that can either access the API server, or - if installed - the API middleware.
+
+It is planned to implements the layers so that it's possible to use at least a subset of the overall functionality
+without having to have all layers available. So in a simplified local setup the editor client might directly communicate
+with the central API server, in this case missing access to the features a locally running instance of the given Scheme
+dialect. Or the locally installed API middleware can make access to all built-in features available while no access to
+the internet and the central API server is possible.
+
+For the maximal 3-tier deployment option, the complement component architecture can be depicted as shown below:
+
+         +------------+        +----------------+
+         | Metadata:  |        |                |
+         | source of  +--------> API server     |
+         | truth      |        |                |
+         +------------+        +--------+-------+
+                                        |
+      Internet                          |
+    +------------------------------------------------+
+      local                             |
+                                        |
+         +------------+        +--------v-------+
+         | Metadata   |        |                |
+         | local      +--------> API middleware |
+         | cache/copy |        |                |
+         +------------+        +---+---------+--+
+                                   |         |
+                                   |         |
+         +------------+   +--------v---+  +--v---------+
+         | Metadata   |   |            |  |            |
+         | local      +---> API client |  | Editor     |
+         | cache/copy |   |            |  |            |
+         +------------+   +------------+  +------------+
 
 ## History
 
