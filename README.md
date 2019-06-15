@@ -15,13 +15,13 @@ The complete functionality is split into various layers:
 
 ## Status
 
-- This is currently all work in practice and of no immediate use.
+- This is currently all work in progress and of no immediate use.
 
 - The implementation currently implements the API server in Guile Scheme; the server-side code is highly dependendent
   from Guile Scheme.
 
 - The implementation currently implements limited features for an API middleware in Guile Scheme and in Gauche Scheme.
-  The invocation of an API middleware instance is currently is just a stub for Guile Scheme and is not yet implemented for
+  The invocation of an API middleware instance is currently just a stub for Guile Scheme and is not yet implemented for
   Gauche Scheme.
 
 # Implementation
@@ -63,12 +63,12 @@ binding (...) into gauche....".
 ### Guile
 
 When using `load`, Guile requires `eval-when`, see the example source block below (and
-the [https://www.gnu.org/software/guile/manual/html_node/Loading.html](documentation)). Guile also requires to add the
+the [documentation](https://www.gnu.org/software/guile/manual/html_node/Loading.html)). Guile also requires to add the
 root folder for the common sources (`~/src/common`) to be added to
-the [https://www.gnu.org/software/guile/manual/html_node/Load-Paths.html](load path). Alternatively
+the [load path](https://www.gnu.org/software/guile/manual/html_node/Load-Paths.html). Alternatively
 `primitive-load-path` can be used within `eval-when` and with using a relative path.
 
-As it is [https://www.gnu.org/software/guile/manual/html_node/Local-Inclusion.html](supposed to do), `include` does not
+As it is [supposed to do](https://www.gnu.org/software/guile/manual/html_node/Local-Inclusion.html), `include` does not
 require `eval-when`, but it also did not resolve paths as expected. So instead for Guile I'm using `include-from-path`,
 which again requires a relative path and assumes that the root folder for the common sources (`~/src/common`) has been
 added to the load path; see `Makefile`.
@@ -80,7 +80,7 @@ added to the load path; see `Makefile`.
 ```
 
 *Note:* Guile has a non-standard extension which allows to customize the default printing behavior of records,
-see [https://www.gnu.org/software/guile/manual/html_node/SRFI_002d9-Records.html](here), chapter "Custom Printers". This
+see [here](https://www.gnu.org/software/guile/manual/html_node/SRFI_002d9-Records.html), chapter "Custom Printers". This
 is currently not used.
 
 ## Testing included and imported bindings
@@ -120,8 +120,9 @@ guile  -L "./guile" -L "./common" -c "(use-modules (sdp common model-guile)) (di
 
 Some of the features provided by this application are implemented by accessing the schemedoc metadata defined in this
 repository: https://github.com/schemedoc/implementation-metadata. The files from this repository are expected locally in
-a filesystem folder, which needs to be passed to the helper procedures defined below. The helper procedures wrap the
-access to the metadata, as far as the content is related to the Scheme documentation.
+a filesystem folder, which needs to be passed to the helper procedures defined below; see `Makefile` variable `MD_PATH`.
+
+The helper procedures wrap the access to the metadata, as far as the content is related to the Scheme documentation.
 
 ## API server, implemented in Guile Scheme
 
