@@ -5,7 +5,7 @@ all :
 test : test-repl test-metadata test-render test-response
 
 FORCE :
-MD_PATH         ?= /home/frank/localsrc/implementation-metadata
+MD_PATH         ?= ../../implementation-metadata
 DEBUG_OFF       ?= '--debug=\#f'
 DEBUG_ALL       ?= '--debug=\#t'
 .PHONY : run-http-server
