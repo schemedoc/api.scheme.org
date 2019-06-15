@@ -1,3 +1,11 @@
+;;; Include file defining support for some common metadata, either common identifiers that can be overridden on the
+;;; command line or generalized wrappers around dialect-specific identifiers, but also the metadata defined in
+;;; repository https://github.com/schemedoc/implementation-metadata.
+
+;;; Commentary:
+
+;;; Code:
+
 (define +schemedoc-host-address+
   (make-parameter "github.com" (lambda (v) (format #f "~a" v))))
 (define +schemedoc-port+
@@ -110,6 +118,7 @@
 
   (info "Command line parsed: "
         (+%%debug-level+) (+schemedoc-host-address+) (+schemedoc-port+) (+schemedoc-repl+)))
+
 ;; Note: below we define some of the handler procedures dispatched by the handler created with `make-dispatch-handler'.
 ;;   These handler procedures will usually be called with an argument list, where the first element is the client info
 ;;   and - where required - the second element is the text-at-point.

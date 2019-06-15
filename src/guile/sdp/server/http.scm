@@ -116,7 +116,11 @@
 
 (define (server-error)
   (values (build-response #:code 500) "Internal Server Error"))
+
 (define dispatch-handler
+  ;; Initialize the request dispatch handler, using the central `make-dispatch-handler' procedure and passing both some
+  ;; handlers for test calls as well as the few already handlers featuring fetching of Scheme documentation.
+
   (let ((md (get-metadata (model:make-client-info-guile))))
     (model:make-dispatch-handler
      `(;; testing
@@ -130,8 +134,14 @@
        ;; REPL helpers
        (built-in-describe-object  atom   ,built-in-describe-object)
        (built-in-apropos-fragment atom   ,built-in-apropos-fragment)))))
-(define (test-render)
 
+(define (test-render)
+  ;; This procedure - respectively the make target `test-render' - renders the responses to our various
+  ;; documentation-fetching handlers, requesting different output formats. Note that it currently does mostly not
+  ;; execute tests asserting expected results, but it simply displays the rendered output, assuming that that output
+  ;; format is anyway due to change. So the code here is rather presenting how to use the API.
+
+  
   (define (%sxml->html-file sxml file-path)
     (call-with-output-file file-path
       (lambda (port)
@@ -189,7 +199,13 @@
     (%exec-test (cut render-json        "json:test-render-alists"  <>) json-request  'test-render-alists alists-arg)
     )
   (test:test-end "test-render-guile"))
+
 (define (test-response)
+  ;; This test procedure - respectively the make target `test-response' - builds the complete response for the given
+  ;; request for each of our Scheme documentation APIs, using the default response renderer. The test procedure also
+  ;; tests correct error handling for some typical error constellations. Again currently the test rather displays the
+  ;; rendered output; it will be changed to assert expected output once the output format has been stabilized.
+  
   (test:test-begin "test-response-guile")
   (let ((client-info (model:make-client-info-guile)))
     (display (model:request->response client-info dispatch-handler (model:make-request "documentation-index-url")))
@@ -205,7 +221,11 @@
     (display (model:request->response client-info dispatch-handler (model:make-request "built-in-apropos-fragment"
                                                                                        #:text-at-point "---totally-unknown"))))
   (test:test-end "test-response-guile"))
+
 (define (render-response sdp-response)
+  ;; Define our HTTP router, plus some more helpers. The makefile targets for the un-instrumented HTTP server and for
+  ;; the debug-server are `run-http-server' and `run-test-http-server,' respectively.
+
   (assert-pred model:<response?> sdp-response)
   (if (model:response-error-message sdp-response)
       (values (build-response #:code (model:response-http-code sdp-response)

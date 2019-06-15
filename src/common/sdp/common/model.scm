@@ -1,4 +1,5 @@
 ;;; Include file defining some commonly used record types and related helper procedures.
+
 ;;; Commentary:
 
 ;;; Code:
@@ -132,7 +133,28 @@
                    (request-accept-type                 request)
                    (request-accept-encoding             request)
                    (request-accept-documentation-format request)))
+
 (define (make-dispatch-handler handler-list)
+
+  ;; This procedure generates a procedure, which will execute an API method and format the results according to the
+  ;; MIME-type accepted by the request. Currently supported response formats are:
+  ;;
+  ;; - text/plain, supporting an additional "documentation format", which can be either plain text or markdown (which is
+  ;;   not yet implemented)
+  ;; - text/html
+  ;; - application/json
+  ;; - application/sexp
+  ;;
+  ;; And for that limited set of response formats again only a very limited set of imput types are supported:
+  ;; - atom: string, symbol, number
+  ;; - list of atoms
+  ;; - association list, supporting only the atom types noted above for keys and values
+  ;; - list of association lists
+  ;;
+  ;; JSON-support is also limited to just the input types just noted, and this is done using some hand-crafted and
+  ;; bare-bones builder. Whenever better JSON-support is required, the package
+  ;; https://www.gnu.org/software/guile/libraries/ with Github repository https://github.com/aconchillo/guile-json seems
+  ;; to be the way to go for Guile.
 
   (define (%atom->string obj quoted?)
     (let ((quoter (if quoted?

@@ -1,4 +1,5 @@
 ;;; Module wrapping access to the REPL helpers supporting reading built-in documentation for Gauche Scheme
+
 ;;; Commentary:
 ;;   Below we define some of the handler procedures dispatched by the handler created with `make-dispatch-handler'.
 ;;   These handler procedures will usually be called with an argument list, where the first element is the client info

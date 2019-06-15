@@ -1,4 +1,5 @@
 ;;; Module wrapping access to the data model for Guile Scheme
+
 ;;; Commentary:
 
 ;;; Code:

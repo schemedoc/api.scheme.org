@@ -1,4 +1,5 @@
 ;;; Module wrapping access to the metadata for Guile Scheme
+
 ;;; Commentary:
 
 ;;; Code:

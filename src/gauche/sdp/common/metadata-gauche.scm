@@ -1,4 +1,5 @@
 ;;; Module wrapping access to the metadata for Gauche Scheme
+
 ;;; Commentary:
 
 ;;; Code:
