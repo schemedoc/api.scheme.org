@@ -13,6 +13,62 @@ The complete functionality is split into various layers:
 
 3. An editor client, that can either access the API server, or - if installed - the API middleware.
 
+## History
+
+It all started with various discussions in the [srfi-discuss](https://srfi-email.schemers.org/srfi-discuss/) mailing
+list, which revolved around the topic as how to set-up an infrastructure allowing access to the documentation of Scheme
+procedures and other symbols defined by [Scheme SRFIs](https://srfi.schemers.org/). The initial idea in this discussion
+was to add structural information to existing and new Scheme SRFIs in order to potentially support various mostly
+documentation-related tools. A summary of these discussions can be
+found [here](https://github.com/schemedoc/schemedoc.el/blob/master/Initial_Discussion_Summary.md).
+
+Some concretization with focus on some simple Emacs helpers incl. some links on exisiting Emacs infrastucture has been
+noted [here](https://github.com/schemedoc/schemedoc.el/blob/master/how-to-access-scheme-api.org).
+
+And finally a first shot on collecting some relevant meta data to drive the Scheme documentation infrastructure can be
+found [here](https://github.com/schemedoc/implementation-metadata).
+
+## Prior art:
+
+* Superior Lisp Interaction Mode for Emacs (*SLIME*): https://github.com/slime/slime
+
+  The Emacs SLIME integration provides a very deep integration from Emacs document editing into a running Common Lisp
+  image, and this integration heavily extend the scope and the complexity of what we discuss here. So we will limit the
+  scope compared to what is available with Emacs and SLIME. And yes, we know that there is SLIME support at least for
+  Kawa Scheme and MIT Scheme - but that simply doesn't mean that all SLIME features are magically available for many
+  more Scheme implementations and for all tool deployment options we're discussing here.
+
+  Also note that there already exists the [Geiser](https://www.nongnu.org/geiser/) package for Emacs, which provides some
+  SLIME-like functionality and that some Scheme implementations provide their own Emacs modes with deep integration, e.g.
+  Bigloo's [Bee mode](https://www-sop.inria.fr/mimosa/fp/Bigloo/doc/bigloo-36.html).
+
+  Here we explicitly focus on documentation access support, meaning that we consider the following high-level SLIME
+  features as being out-of-scope: Evaluation, Compilation, Macro-expansion, Disassembly, Profiling or semantic indentation.
+
+  In addition to the well-established functionality provided by Emacs and SLIME there are also the extented features
+  provided by the REPLs of some Scheme implementations, which are also very well of interest for what we're discussing
+  here. Making the functionality of these REPLS available in the context of their respective Schemes can be made possible
+  by considering additional deployment options for the documentation tools discussed here.
+
+* Microsoft Language Server Protocol (*LSP*): https://microsoft.github.io/language-server-protocol/specification;
+  https://langserver.org/; https://github.com/Microsoft/language-server-protocol
+
+  The LSP includes a large set of features, from which only very few are considered to be in scope of what we're
+  discussing here. LSP features are excluded here either because they do not match the purpose of the tool we're
+  discussing here and/or because they would significantly increase complexity.
+
+  E.g. many LSP features are based on the fact that both the server and the client have a shared knowledge of the current
+  document or even of the whole current workspace (meaning the complete set of currently "relevant" files). This shared
+  knowledge allows the communication based on text positions and text ranges and it allows document-wide actions initiated
+  by the server side.
+
+  For now we want to concentrate on the subset of features where the client only sents a symbol to the server and where
+  the server does only have access to internet-wide visible documents, but not to documents stored on the client.
+
+  This means that we consider the following high-level features being out-of-scope: code refactoring, code error detection
+  and auto-correction, symbol renaming, symbol highlightning and syntactic coloring, code formatting, folding or
+  indentation, collection of document-wide categories of text ranges such as syntactic identifiers URLs or color codes.
+
 ## Status
 
 - This is currently all work in progress and of no immediate use.
