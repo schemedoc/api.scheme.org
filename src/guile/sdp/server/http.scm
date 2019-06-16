@@ -5,6 +5,7 @@
   #:use-module (web request)
   #:use-module (web response)
   #:use-module (web uri)
+  #:use-module ((srfi srfi-1)  #:prefix list:)
   #:use-module ((srfi srfi-13) #:prefix string:)
   #:use-module (srfi srfi-26)           ; cut, cute
   #:use-module ((srfi srfi-64) #:prefix test:)
@@ -22,7 +23,8 @@
   (or (assoc-ref (request-headers request) header) dflt))
 
 (define (request-query-components request)
-  ;; -> (alist-of (cons name value)), where name is a symbol and value is a key
+  ;; request -> (alist-of (cons name value)), where name is a symbol and value is a string
+
   (let ((query (uri-query (request-uri request))))
     (if query
         (map (lambda (query-component)
@@ -141,63 +143,92 @@
   ;; execute tests asserting expected results, but it simply displays the rendered output, assuming that that output
   ;; format is anyway due to change. So the code here is rather presenting how to use the API.
 
-
-  (define (%sxml->html-file sxml file-path)
+  (define (sxml->html-file sxml file-path)
     (call-with-output-file file-path
       (lambda (port)
         (sxml->html sxml port))))
 
-  (define (%sxml->html-string sxml)
+  (define (sxml->html-string sxml)
     (call-with-output-string
       (lambda (port)
         (sxml->html sxml port))))
 
-  (define (%rendered->string rendering-thunk)
+  (define (rendered->string rendering-thunk)
     (define-values (_ port-writer) (rendering-thunk))
     (call-with-output-string port-writer))
 
   (test:test-begin "test-render-guile")
-  (test:test-assert (%sxml->html-string '(ul (li foo) (li bar)))
+  (test:test-assert (sxml->html-string '(ul (li foo) (li bar)))
                     "<ul><li>foo</li><li>bar</li></ul>")
-  (test:test-assert (%sxml->html-string '(dl (dt k1) (dd v1) (dt k2) (dd v2)))
+  (test:test-assert (sxml->html-string '(dl (dt k1) (dd v1) (dt k2) (dd v2)))
                     "<dl><dt>k1</dt><dd>v1</dd><dt>k2</dt><dd>v2</dd></dl>")
 
-  (let ((plain-request (model:make-request "test-render-html" #:accept-type "text/plain"))
-        (html-request  (model:make-request "test-render-html" #:accept-type "text/html"))
-        (sexp-request  (model:make-request "test-render-sexp" #:accept-type "application/sexp"))
-        (json-request  (model:make-request "test-render-json" #:accept-type "application/json"))
+  (let ((plain-request (model:make-request "test-render-plain" #:accept-type "text/plain"))
+        (html-request  (model:make-request "test-render-html"  #:accept-type "text/html"))
+        (sexp-request  (model:make-request "test-render-sexp"  #:accept-type "application/sexp"))
+        (json-request  (model:make-request "test-render-json"  #:accept-type "application/json"))
         (atom-arg      "some-string-arg")
         (list-arg      '(some-symbol-arg-1 "some-string-arg-2" 3.14159))
         (alist-arg     '((k1 . v1) (k2 . v2)))
         (alists-arg    '(((c1 . HC1) (c2 . HC2)) ((c1 . R1C1) (c2 . R1C2)) ((c1 . R2C1) (c2 . R2C2)))))
 
-    (define (%render-test render-proc request api-key arg)
-      (%rendered->string (lambda () (render-proc ((dispatch-handler request api-key) arg)))))
+    (define (render-test render-proc sdp-request api-key arg)
+      (assert-pred procedure? render-proc)
+      (assert-pred model:<request?> sdp-request)
+      (assert-pred symbol? api-key)
+      (rendered->string (lambda () (render-proc ((dispatch-handler sdp-request api-key) arg)))))
 
-    (define (%exec-test render-proc request api-key arg)
-      (displayln (list api-key (%render-test render-proc request api-key arg)))
-      (newline) (newline))
+    (define* (exec-test render-proc sdp-request api-key arg #:optional exp-pred/spec)
+      (let ((response-str (render-test render-proc sdp-request api-key arg)))
+        (cond
+         ((procedure? exp-pred/spec)
+          (test:test-assert (exp-pred/spec response-str)))
+         ((string? exp-pred/spec)
+          (test:test-assert (string:string-contains response-str exp-pred/spec)))
+         ((eq? exp-pred/spec #t)
+          (test:test-assert (string:string-contains response-str arg)))
+         (else
+          (displayln (list api-key response-str))
+          (newline) (newline)))))
 
-    (%exec-test (cut render-plain       "plain:test-render-atom"   <>) plain-request 'test-render-atom   atom-arg)
-    (%exec-test (cut render-plain       "plain:test-render-list"   <>) plain-request 'test-render-list   list-arg)
-    (%exec-test (cut render-plain       "plain:test-render-alist"  <>) plain-request 'test-render-alist  alist-arg)
-    (%exec-test (cut render-plain       "plain:test-render-alists" <>) plain-request 'test-render-alists alists-arg)
+    (exec-test (cut render-plain       "plain:test-render-atom"   <>) plain-request 'test-render-atom   atom-arg #t)
+    (exec-test (cut render-plain       "plain:test-render-list"   <>) plain-request 'test-render-list   list-arg
+               (lambda (response-str)
+                 (list:every
+                  (lambda (elem)
+                    (string:string-contains response-str (format #f "~a" elem)))
+                  list-arg)))
+    (exec-test (cut render-plain       "plain:test-render-alist"  <>) plain-request 'test-render-alist  alist-arg
+               (lambda (response-str)
+                 (list:every
+                  (lambda (elem)
+                    (and (string:string-contains response-str (format #f "~a" (car elem)))
+                         (string:string-contains response-str (format #f "~a" (cdr elem)))))
+                  alist-arg)))
+    (exec-test (cut render-plain       "plain:test-render-alists" <>) plain-request 'test-render-alists alists-arg
+               (lambda (response-str)
+                 (list:every
+                  (lambda (alist-arg)
+                    (list:every
+                     (lambda (elem)
+                       (string:string-contains response-str (format #f "~a" (cdr elem))))
+                     alist-arg))
+                  alists-arg)))
 
-    (%exec-test (cut render-simple-html "html:test-render-atom"    <>) html-request  'test-render-atom   atom-arg)
-    (%exec-test (cut render-simple-html "html:test-render-list"    <>) html-request  'test-render-list   list-arg)
-    (%exec-test (cut render-simple-html "html:test-render-alist"   <>) html-request  'test-render-alist  alist-arg)
-    (%exec-test (cut render-simple-html "html:test-render-alists"  <>) html-request  'test-render-alists alists-arg)
+    (exec-test (cut render-simple-html "html:test-render-atom"    <>) html-request  'test-render-atom   atom-arg #t)
+    (exec-test (cut render-simple-html "html:test-render-list"    <>) html-request  'test-render-list   list-arg)
+    (exec-test (cut render-simple-html "html:test-render-alist"   <>) html-request  'test-render-alist  alist-arg)
+    (exec-test (cut render-simple-html "html:test-render-alists"  <>) html-request  'test-render-alists alists-arg)
 
-    (%exec-test (cut render-sexp        "sexp:test-render-atom"    <>) sexp-request  'test-render-atom   atom-arg)
-    (%exec-test (cut render-sexp        "sexp:test-render-list"    <>) sexp-request  'test-render-list   list-arg)
-    (%exec-test (cut render-sexp        "sexp:test-render-alist"   <>) sexp-request  'test-render-alist  alist-arg)
-    (%exec-test (cut render-sexp        "sexp:test-render-alists"  <>) sexp-request  'test-render-alists alists-arg)
+    (exec-test (cut render-sexp        "sexp:test-render-atom"    <>) sexp-request  'test-render-atom   atom-arg #t)
+    (exec-test (cut render-sexp        "sexp:test-render-list"    <>) sexp-request  'test-render-list   list-arg)
+    (exec-test (cut render-sexp        "sexp:test-render-alist"   <>) sexp-request  'test-render-alist  alist-arg)
+    (exec-test (cut render-sexp        "sexp:test-render-alists"  <>) sexp-request  'test-render-alists alists-arg)
 
-    (%exec-test (cut render-json        "json:test-render-atom"    <>) json-request  'test-render-atom   atom-arg)
-    (%exec-test (cut render-json        "json:test-render-list"    <>) json-request  'test-render-list   list-arg)
-    (%exec-test (cut render-json        "json:test-render-alist"   <>) json-request  'test-render-alist  alist-arg)
-    (%exec-test (cut render-json        "json:test-render-alists"  <>) json-request  'test-render-alists alists-arg)
-    )
+    (exec-test (cut render-json        "json:test-render-atom"    <>) json-request  'test-render-atom   atom-arg #t)
+    (exec-test (cut render-json        "json:test-render-list"    <>) json-request  'test-render-list   list-arg)
+    (exec-test (cut render-json        "json:test-render-alist"   <>) json-request  'test-render-alist  alist-arg)
+    (exec-test (cut render-json        "json:test-render-alists"  <>) json-request  'test-render-alists alists-arg))
   (test:test-end "test-render-guile"))
 
 (define (test-response)
@@ -208,25 +239,53 @@
 
   (test:test-begin "test-response-guile")
   (let ((client-info (model:make-client-info-guile)))
-    (display (model:request->response client-info dispatch-handler (model:make-request "documentation-index-url")))
-    (display (model:request->response client-info dispatch-handler (model:make-request "documentation-query-url"
-                                                                                       #:text-at-point "format")))
-    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-describe-object"
-                                                                                       #:text-at-point "or-map")))
-    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-apropos-fragment"
-                                                                                       #:text-at-point "bind")))
+
+    (define (render-test sdp-request)
+      (assert-pred model:<request?> sdp-request)
+      (model:request->response client-info dispatch-handler sdp-request))
+
+    (define* (exec-test sdp-request #:optional exp-pred/spec)
+      (let ((response (render-test sdp-request)))
+        (cond
+         ((procedure? exp-pred/spec)
+          (test:test-assert (exp-pred/spec response)))
+         ((string? exp-pred/spec)
+          (test:test-assert (= (model:response-http-code response) 200))
+          (test:test-assert (string:string-contains (model:response-result response) exp-pred/spec))
+          (test:test-assert (not (model:response-error-message response))))
+         ((number? exp-pred/spec)
+          (test:test-assert (= (model:response-http-code response) exp-pred/spec))
+          (test:test-assert (not (model:response-result response)))
+          (test:test-assert (model:response-error-message response)))
+         ((eq? exp-pred/spec #t)
+          (test:test-assert (= (model:response-http-code response) 200))
+          (test:test-assert (positive? (string-length (model:response-result response))))
+          (test:test-assert (not (model:response-error-message response))))
+         (else
+          (displayln (list sdp-request '--> response))
+          (newline) (newline)))))
+
+    (exec-test (model:make-request "documentation-index-url")
+               "https://www.gnu.org/software/guile/manual/")
+    (exec-test (model:make-request "documentation-query-url"   #:text-at-point "format")
+               "https://practical-scheme.net/wiliki/schemexref.cgi?format")
+    (exec-test (model:make-request "built-in-describe-object"  #:text-at-point "or-map") #t)
+    (exec-test (model:make-request "built-in-apropos-fragment" #:text-at-point "bind") #t)
     ;; api method not found:
-    (display (model:request->response client-info dispatch-handler (model:make-request "---totally-unknown")))
+    (exec-test (model:make-request "---totally-unknown") 500)
     ;; no result found:
-    (display (model:request->response client-info dispatch-handler (model:make-request "built-in-apropos-fragment"
-                                                                                       #:text-at-point "---totally-unknown"))))
+    (exec-test (model:make-request "built-in-apropos-fragment" #:text-at-point "---totally-unknown") 500)
+    ;; test for other response formats; TODO: also check error response formats
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/plain"))
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/html"))
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/sexp"))
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/json"))
+    )
   (test:test-end "test-response-guile"))
 
 (define (render-response sdp-response)
-  ;; Define our HTTP router, plus some more helpers. The makefile targets for the un-instrumented HTTP server and for
-  ;; the debug-server are `run-http-server' and `run-test-http-server,' respectively.
-
   (assert-pred model:<response?> sdp-response)
+
   (if (model:response-error-message sdp-response)
       (values (build-response #:code (model:response-http-code sdp-response)
                               #:headers `((content-type . (,(string->symbol (model:response-content-type sdp-response))))))
@@ -273,6 +332,9 @@ implementation: ~s; client-info: ~s; text-at-point: ~s"
                                                                       #:accept-type accept-type))))))
 
 (define* (make-api-handler #:optional (test-mode? #f))
+  ;; Define our HTTP router. The makefile targets for the un-instrumented HTTP server and for the debug-server are
+  ;; `run-http-server' and `run-test-http-server,' respectively.
+
   (lambda (request body)
     ;; https://www.gnu.org/software/guile/manual/html_node/Requests.html#Requests
     (let ((uri      (request-uri request))
