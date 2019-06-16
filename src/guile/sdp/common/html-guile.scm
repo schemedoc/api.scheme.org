@@ -14,7 +14,7 @@
 ;; License along with this library.  If not, see
 ;; <http://www.gnu.org/licenses/>.
 
-(define-module (sdp server html)
+(define-module (sdp common html-guile)
   #:use-module (sxml simple)
   #:use-module ((srfi srfi-13) #:prefix string:)
   #:use-module (srfi srfi-26)           ; cut, cute
@@ -22,7 +22,7 @@
   #:use-module (ice-9 match)
   #:use-module (ice-9 format)
   #:use-module (ice-9 hash-table)
-  #:export (sxml->html))
+  #:export (sxml->html sxml->html-string))
 
 (define %void-elements
   '(area
@@ -362,3 +362,13 @@ list ATTRS and the child nodes in BODY."
      (string->escaped-html text port))
     ;; Render arbitrary Scheme objects, too.
     (obj (object->escaped-html obj port))))
+
+;; (define (sxml->html-file sxml file-path)
+;;   (call-with-output-file file-path
+;;     (lambda (port)
+;;       (sxml->html sxml port))))
+
+(define (sxml->html-string sxml)
+  (call-with-output-string
+    (lambda (port)
+      (sxml->html sxml port))))

@@ -12,7 +12,7 @@
   #:use-module ((sdp common model-guile) #:prefix model:)
   #:use-module (sdp common repl-guile)
   #:use-module (sdp common metadata-guile)
-  #:use-module (sdp server html)
+  #:use-module (sdp common html-guile)
   #:export (http-server test-http-server)
   #:export (test-render test-response))
 
@@ -143,16 +143,6 @@
   ;; execute tests asserting expected results, but it simply displays the rendered output, assuming that that output
   ;; format is anyway due to change. So the code here is rather presenting how to use the API.
 
-  (define (sxml->html-file sxml file-path)
-    (call-with-output-file file-path
-      (lambda (port)
-        (sxml->html sxml port))))
-
-  (define (sxml->html-string sxml)
-    (call-with-output-string
-      (lambda (port)
-        (sxml->html sxml port))))
-
   (define (rendered->string rendering-thunk)
     (define-values (_ port-writer) (rendering-thunk))
     (call-with-output-string port-writer))
@@ -244,20 +234,28 @@
       (assert-pred model:<request?> sdp-request)
       (model:request->response client-info dispatch-handler sdp-request))
 
-    (define* (exec-test sdp-request #:optional exp-pred/spec)
+    (define* (exec-test sdp-request #:optional exp-spec exp-list/pred)
       (let ((response (render-test sdp-request)))
         (cond
-         ((procedure? exp-pred/spec)
-          (test:test-assert (exp-pred/spec response)))
-         ((string? exp-pred/spec)
+         ((string? exp-spec)
           (test:test-assert (= (model:response-http-code response) 200))
-          (test:test-assert (string:string-contains (model:response-result response) exp-pred/spec))
+          (test:test-assert (string:string-contains (model:response-result response) exp-spec))
           (test:test-assert (not (model:response-error-message response))))
-         ((number? exp-pred/spec)
-          (test:test-assert (= (model:response-http-code response) exp-pred/spec))
+         ((number? exp-spec)
+          (test:test-assert (= (model:response-http-code response) exp-spec))
           (test:test-assert (not (model:response-result response)))
-          (test:test-assert (model:response-error-message response)))
-         ((eq? exp-pred/spec #t)
+          (cond
+           ((procedure? exp-list/pred)
+            (test:test-assert (exp-list/pred (model:response-error-message response))))
+           ((list? exp-list/pred)
+            (test:test-assert
+             (let ((err (model:response-error-message response)))
+               (list:every
+                (lambda (exp-str) (string:string-contains err exp-str))
+                exp-list/pred))))
+           (else
+            (test:test-assert (model:response-error-message response)))))
+         ((eq? exp-spec #t)
           (test:test-assert (= (model:response-http-code response) 200))
           (test:test-assert (positive? (string-length (model:response-result response))))
           (test:test-assert (not (model:response-error-message response))))
@@ -265,6 +263,7 @@
           (displayln (list sdp-request '--> response))
           (newline) (newline)))))
 
+    ;; test the various API URL suffixes (using default accept-type/response content-type: "application/sexp"):
     (exec-test (model:make-request "documentation-index-url")
                "https://www.gnu.org/software/guile/manual/")
     (exec-test (model:make-request "documentation-query-url"   #:text-at-point "format")
@@ -275,12 +274,24 @@
     (exec-test (model:make-request "---totally-unknown") 500)
     ;; no result found:
     (exec-test (model:make-request "built-in-apropos-fragment" #:text-at-point "---totally-unknown") 500)
-    ;; test for other response formats; TODO: also check error response formats
-    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/plain"))
-    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/html"))
-    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/sexp"))
-    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/json"))
-    )
+    ;; test for other response formats, OK response:
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/plain")
+               "https://www.gnu.org/software/guile/manual/")
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "text/html")
+               "https://www.gnu.org/software/guile/manual/")
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/sexp")
+               "https://www.gnu.org/software/guile/manual/")
+    (exec-test (model:make-request "documentation-index-url"   #:accept-type "application/json")
+               "https://www.gnu.org/software/guile/manual/")
+    ;; test for other response formats, error response:
+    (exec-test (model:make-request "---totally-unknown"        #:accept-type "text/plain")
+               500 '("error" "api-method-unknown" "method" "---totally-unknown" ))
+    (exec-test (model:make-request "---totally-unknown"        #:accept-type "text/html")
+               500 '("error" "api-method-unknown" "method" "---totally-unknown"))
+    (exec-test (model:make-request "---totally-unknown"        #:accept-type "application/sexp")
+               500 '("error" "api-method-unknown" "method" "---totally-unknown"))
+    (exec-test (model:make-request "---totally-unknown"        #:accept-type "application/json")
+               500 '("error" "api-method-unknown" "method" "---totally-unknown" )))
   (test:test-end "test-response-guile"))
 
 (define (render-response sdp-response)

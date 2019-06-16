@@ -16,6 +16,7 @@
            request-accept-type request-accept-encoding request-accept-documentation-format)
   (export <response?> response-http-code response-result response-error-message
           response-content-type response-content-encoding response-content-documentation-format)
+  (export sxml->html-string)
   (export make-client-info-gauche make-generic-client-info make-unknown-client-info)
   (export make-request request->response make-dispatch-handler))
 (select-module sdp.common.model-gauche)
@@ -23,6 +24,9 @@
 (include "prelude.scm")
 (include "logging.scm")
 (include "model.scm")
+
+(define (make-dispatch-handler handler-list)
+  (%make-dispatch-handler handler-list sxml->html-string))
 
 (define (make-client-info-gauche :key (implementation-version #f) (implementation-mode #f))
   (%make-client-info "gauche" implementation-version implementation-mode))

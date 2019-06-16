@@ -31,7 +31,6 @@
 (define (test)
 
   (define (test-code+text response body-str exp-code exp-str)
-    (display (list '>>>>>>>>>>>>>>> response body-str)) (newline)
     (if (= (response-code response) exp-code)
         (test:test-assert (string:string-contains body-str exp-str))
         (error "Unexpected HTTP code" (response-code response))))

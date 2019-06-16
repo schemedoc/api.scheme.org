@@ -113,8 +113,7 @@
                    (request-text-document               request)
                    (request-text-at-point               request)
                    (assert-pred number?                 http-code)
-                   ;; `result' is not necessarily a string, might also be an s-exp; it just cannot be #f:
-                   (assert-pred identity                result)
+                   (assert-pred string?                 result) ; format to string before passing as result
                    #f                                   ; error-message
                    (assert-pred string?                 (request-accept-type request))
                    (assert-pred string?                 (request-accept-encoding request))
@@ -128,14 +127,12 @@
                    (request-text-at-point               request)
                    (assert-pred number?                 http-error-code)
                    #f                                   ; result
-                   ;; `error-message' is not necessarily a string, might also be an s-exp; it just cannot be #f:
-                   (assert-pred identity                error-message)
-                   (request-accept-type                 request)
-                   (request-accept-encoding             request)
-                   (request-accept-documentation-format request)))
+                   (assert-pred string?                 error-message) ; format to string before passing as error
+                   (assert-pred string?                 (request-accept-type request))
+                   (assert-pred string?                 (request-accept-encoding request))
+                   (assert-pred pair?                   (request-accept-documentation-format request))))
 
-(define (make-dispatch-handler handler-list)
-
+(define (%make-dispatch-handler handler-list sxml->html-string)
   ;; This procedure generates a procedure, which will execute an API method and format the results according to the
   ;; MIME-type accepted by the request. Currently supported response formats are:
   ;;
@@ -199,7 +196,10 @@
     (define headers (map cdr (car ll-strs)))
     (define rows (map (lambda (l) (map cdr l)) (cdr ll-strs)))
     (define (format-line l) (string-join l "\t"))
-    (string-join (map format-line (cons headers rows)) "\n"))
+    (map format-line (cons headers rows)))
+
+  (define (list->plain-string strs)
+    (string-join strs "\n"))
 
   ;; --- html builders
 
@@ -229,21 +229,28 @@
   (define (%join-items items)
     (string-append "[" (string-join items ",") "]"))
 
-  (define (%join-object obj)
+  (define (%join-object->string obj)
     (string-join (map (lambda (kv) (string-append (car kv) ":" (cdr kv))) obj) ","))
 
-  (define (list->json l)
+  (define (list->json-string l)
     ;; '(foo bar) -> ["foo","bar"]
     (%join-items ((->list atom->qstring) l)))
 
-  (define (alist->json l)
+  (define (alist->json-string l)
     ;; '((k1 . v1) (k2 . v2)) -> {"k1":"v1","k2":"v2"}
-    (string-append "{" (%join-object ((->alist atom->qstring) l)) "}"))
+    (string-append "{" (%join-object->string ((->alist atom->qstring) l)) "}"))
 
-  (define (alists->json ll)
+  (define (alists->json-string ll)
     ;; '(((c1 . h1) (c2 . h2)) ((c1 . r11) (c2 . r12)) ((c1 . r21) (c2 . r22)))
     ;;   -> "["c1":"HC1","c2":"HC2","c1":"R1C1","c2":"R1C2","c1":"R2C1","c2":"R2C2"]"
-    (%join-items (map %join-object ((->alists atom->qstring) ll))))
+    (%join-items (map %join-object->string ((->alists atom->qstring) ll))))
+
+  ;; ---
+
+  (define (sexp->string sexp)
+    (call-with-output-string
+      (lambda (port)
+        (write sexp port))))
 
   ;; ---
 
@@ -255,45 +262,47 @@
        ((and (string=? at "text/plain") (string=? df "plaintext"))
         (case result-type
           ((atom)   atom->string)
-          ((list)   (->list atom->string))
-          ((alist)  alist->plain)
-          ((alists) alists->plain)
+          ((list)   (lambda (l) (list->plain-string ((->list atom->string) l))))
+          ((alist)  (lambda (l) (list->plain-string (alist->plain l))))
+          ((alists) (lambda (l) (list->plain-string (alists->plain l))))
           (else (error "Bad result type" result-type))))
        ((and (string=? at "text/plain") (string=? df "markdown"))
         (case result-type               ; TODO: implement formatting for markdown
           ((atom)   atom->string)
-          ((list)   (->list atom->string))
-          ((alist)  alist->plain)
-          ((alists) alists->plain)
+          ((list)   (lambda (l) (list->plain-string ((->list atom->string) l))))
+          ((alist)  (lambda (l) (list->plain-string (alist->plain l))))
+          ((alists) (lambda (l) (list->plain-string (alists->plain l))))
           (else (error "Bad result type" result-type))))
        ((string=? at "text/html")
         (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
-          ((atom)   atom->html)
-          ((list)   list->html)
-          ((alist)  alist->html)
-          ((alists) alists->html)
+          ((atom)   (lambda (sxml) (sxml->html-string (atom->html sxml))))
+          ((list)   (lambda (sxml) (sxml->html-string (list->html sxml))))
+          ((alist)  (lambda (sxml) (sxml->html-string (alist->html sxml))))
+          ((alists) (lambda (sxml) (sxml->html-string (alists->html sxml))))
           (else (error "Bad result type" result-type))))
        ((string=? at "application/sexp")
         (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
           ((atom)   atom->qstring)
-          ((list)   (->list atom->qstring))
-          ((alist)  (->alist atom->qstring))
-          ((alists) (->alists atom->qstring))
+          ((list)   (lambda (sexp) (sexp->string ((->list atom->qstring) sexp))))
+          ((alist)  (lambda (sexp) (sexp->string ((->alist atom->qstring) sexp))))
+          ((alists) (lambda (sexp) (sexp->string ((->alists atom->qstring) sexp))))
           (else (error "Bad result type" result-type))))
        ((string=? at "application/json")
         (unless (string=? df "plaintext") (error "Bad documentation format" df))
         (case result-type
           ((atom)   atom->qstring)      ; JSON now allows single string as value (RFC4627, RFC7159)
-          ((list)   list->json)
-          ((alist)  alist->json)
-          ((alists) alists->json)
+          ((list)   list->json-string)
+          ((alist)  alist->json-string)
+          ((alists) alists->json-string)
           (else (error "Bad result type" result-type))))
        (else (error "Bad accept type" at)))))
 
   (define ext-handler-list (append handler-list
-                                   ;; append generic handlers - if also user-provided, the generic handler is not used:
+                                   ;; Append generic handlers - if also provided by user in `handler-list' the generic
+                                   ;; handler is not used. We expect an error to be an alist and we simply pass that
+                                   ;; alist to the formatter:
                                    `((error-handler alist ,identity))))
 
   (lambda (request api-key)
@@ -315,12 +324,16 @@
               (and result (result-formatter result))))))
        (else
         (loop (cdr handler-search-list)))))))
+
 (define (request->response client-info dispatch-handler request)
   (assert-pred <client-info?> client-info)
   (assert-pred procedure? dispatch-handler)
   (assert-pred <request?> request)
   (assert-pred <response?>
                (let ((error-handler (dispatch-handler request 'error-handler))
+                     (trace-error (lambda (err) ; use this to wrap call to `error-handler':
+                                    (format #t "CI: ~s, REQ: ~s -> ~s~%" client-info request err)
+                                    err))
                      (method (request-method request)))
 
                  (define (dispatch-nullary api-key http-ok-code http-error-code)
