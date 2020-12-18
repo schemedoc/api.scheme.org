@@ -5,8 +5,13 @@
   (begin
 
     (define (read-all)
-      (let loop ((forms '()))
-        (let ((form (read)))
-          (if (eof-object? form)
-              (reverse forms)
-              (loop (cons form forms))))))))
+      (let loop ((whole '()))
+        (let ((part (read)))
+          (if (eof-object? part) (reverse whole)
+              (loop (cons part whole))))))
+
+    (define (read-bytevector-all port)
+      (let loop ((whole (bytevector)))
+        (let ((part (read-bytevector 4096 port)))
+          (if (eof-object? part) whole
+              (loop (bytevector-append whole part))))))))

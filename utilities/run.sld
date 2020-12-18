@@ -4,18 +4,15 @@
           run/output-bytevector
           run/output-string
           run/output-line)
-  (import (scheme base) (srfi 8) (srfi 13))
+  (import (scheme base)
+          (srfi 8)
+          (srfi 13)
+          (utilities read))
   (cond-expand
     (chicken (import (chicken file posix)
                      (chicken process)
                      (chicken process-context))))
   (begin
-
-    (define (read-bytevector-all port)
-      (let loop ((whole (bytevector)))
-        (let ((part (read-bytevector 4096 port)))
-          (if (eof-object? part) whole
-              (loop (bytevector-append whole part))))))
 
     (define (launch thunk) (process-fork thunk #t))
 
